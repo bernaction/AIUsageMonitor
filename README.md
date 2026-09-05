@@ -18,6 +18,20 @@ A lightweight Windows desktop gadget that brings AI service usage limits into a 
 
 Preferences are stored in `%APPDATA%\AIUsageMonitor\settings.json`.
 
+## Screenshots
+
+AI Usage Monitor keeps usage windows visible at a glance, including session, weekly, reserve, and reset information when provided by the connected service.
+
+### Main dashboard
+
+![AI Usage Monitor dashboard](docs/screenshots/main.png)
+
+### Settings
+
+Choose which services are displayed, drag to change their order, and select the automatic refresh interval.
+
+![AI Usage Monitor settings](docs/screenshots/config.png)
+
 ## Requirements
 
 - Windows 10 or later.
