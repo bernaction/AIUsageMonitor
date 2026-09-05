@@ -1,0 +1,38 @@
+# Build output
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+artifacts/
+
+# Visual Studio and JetBrains
+.vs/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+_ReSharper*/
+*.DotSettings.user
+
+# .NET tooling and test output
+TestResults/
+*.nupkg
+*.snupkg
+coverage/
+coverage.*
+
+# Local settings and secrets
+.env
+.env.*
+!.env.example
+auth.json
+settings.json
+*.secrets.json
+
+# Operating system files
+.DS_Store
+Thumbs.db
+Desktop.ini
