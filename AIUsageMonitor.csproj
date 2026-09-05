@@ -7,5 +7,6 @@
     <Nullable>enable</Nullable>
     <AssemblyName>AIUsageMonitor</AssemblyName>
     <RootNamespace>AIUsageMonitor</RootNamespace>
+    <ApplicationIcon>Assets\AIUsageMonitor.ico</ApplicationIcon>
   </PropertyGroup>
 </Project>
