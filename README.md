@@ -3,7 +3,7 @@
 A lightweight Windows desktop gadget that brings AI service usage limits into a single, glanceable view.
 
 > [!NOTE]
-> This project is an early-stage prototype. Codex usage is read from the local signed-in session; Claude and Gemini currently display sample data.
+> This project is in an early stage. Codex and Claude Code usage are read from their local signed-in sessions; Gemini remains marked as not connected and does not display fabricated metrics.
 
 ## Features
 
@@ -12,6 +12,7 @@ A lightweight Windows desktop gadget that brings AI service usage limits into a 
 - Separate 5-hour session and weekly usage indicators.
 - Codex reserve usage and reset-credit information.
 - Automatic Codex refresh using the local signed-in session.
+- Automatic Claude Code refresh using the local OAuth session.
 - Configurable provider visibility, ordering, and refresh interval.
 - Resizable layout with scrolling when needed.
 
@@ -21,7 +22,7 @@ Preferences are stored in `%APPDATA%\AIUsageGadget\settings.json`.
 
 - Windows 10 or later.
 - [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) or later.
-- A signed-in Codex session for live Codex usage data.
+- A signed-in Codex or Claude Code session for live usage data.
 
 ## Run locally
 
@@ -35,9 +36,10 @@ dotnet run
 ## Privacy and authentication
 
 - The app reads `~/.codex/auth.json` only to query usage limits for the account already signed in on the device.
+- The app reads `~/.claude/.credentials.json` only to query Claude Code usage limits for the account already signed in on the device.
 - The access token remains in memory for the request and is never stored by this app.
 - Prompts, responses, and Codex session content are not read.
-- Usage data is requested from an internal Codex/ChatGPT endpoint. This integration may stop working if that endpoint changes.
+- Usage data is requested from the Codex/ChatGPT and Claude OAuth usage endpoints. These integrations may stop working if their endpoints change.
 
 Never commit `auth.json`, access tokens, or other credentials. See [SECURITY.md](SECURITY.md) for reporting security issues.
 

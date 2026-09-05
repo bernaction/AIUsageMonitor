@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
@@ -15,6 +16,7 @@ namespace AIUsageGadget;
 public partial class MainWindow : Window
 {
     private static readonly int[] RefreshIntervalOptions = [1, 2, 5, 10, 15, 30];
+    private static readonly CultureInfo EnglishCulture = CultureInfo.GetCultureInfo("en-US");
 
     private const int WmNcHitTest = 0x0084;
     private const int HtLeft = 10;
@@ -28,6 +30,7 @@ public partial class MainWindow : Window
     private const double ResizeBorderSize = 8;
 
     private readonly IAiUsageProvider _codexUsageProvider = new CodexUsageProvider();
+    private readonly IAiUsageProvider _claudeUsageProvider = new ClaudeUsageProvider();
     private readonly GadgetSettingsStore _settingsStore = new();
     private readonly CancellationTokenSource _lifetimeCancellation = new();
     private readonly DispatcherTimer _refreshTimer;
@@ -38,7 +41,6 @@ public partial class MainWindow : Window
     private ProviderDisplayOption? _draggedProvider;
     private bool _isRefreshing;
     private bool _settingsLoaded;
-    private bool _codexIsAvailable;
 
     public MainWindow()
     {
@@ -49,8 +51,8 @@ public partial class MainWindow : Window
             Interval = TimeSpan.FromMinutes(1)
         };
         _providerOptions.Add(new ProviderDisplayOption("codex", "Codex", "Live limits from the local session"));
-        _providerOptions.Add(new ProviderDisplayOption("claude", "Claude", "Sample data for now"));
-        _providerOptions.Add(new ProviderDisplayOption("gemini", "Gemini", "Sample data for now"));
+        _providerOptions.Add(new ProviderDisplayOption("claude", "Claude", "Not connected yet"));
+        _providerOptions.Add(new ProviderDisplayOption("gemini", "Gemini", "Not connected yet"));
         _providerCards.Add("codex", CodexCard);
         _providerCards.Add("claude", ClaudeCard);
         _providerCards.Add("gemini", GeminiCard);
@@ -68,7 +70,7 @@ public partial class MainWindow : Window
     {
         await LoadSettingsAsync();
         _refreshTimer.Start();
-        await RefreshCodexUsageAsync();
+        await RefreshUsageAsync();
     }
 
     private async Task LoadSettingsAsync()
@@ -111,10 +113,10 @@ public partial class MainWindow : Window
 
     private async void RefreshTimer_Tick(object? sender, EventArgs e)
     {
-        await RefreshCodexUsageAsync();
+        await RefreshUsageAsync();
     }
 
-    private async Task RefreshCodexUsageAsync()
+    private async Task RefreshUsageAsync()
     {
         if (_isRefreshing)
         {
@@ -124,8 +126,11 @@ public partial class MainWindow : Window
         _isRefreshing = true;
         try
         {
-            AiUsageSnapshot snapshot = await _codexUsageProvider.GetUsageAsync(_lifetimeCancellation.Token);
-            ApplyCodexSnapshot(snapshot);
+            Task<AiUsageSnapshot> codexTask = _codexUsageProvider.GetUsageAsync(_lifetimeCancellation.Token);
+            Task<AiUsageSnapshot> claudeTask = _claudeUsageProvider.GetUsageAsync(_lifetimeCancellation.Token);
+            AiUsageSnapshot[] snapshots = await Task.WhenAll(codexTask, claudeTask);
+            ApplyCodexSnapshot(snapshots[0]);
+            ApplyClaudeSnapshot(snapshots[1]);
         }
         catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
         {
@@ -141,20 +146,17 @@ public partial class MainWindow : Window
     {
         if (!snapshot.IsAvailable)
         {
-            _codexIsAvailable = false;
             ApplyUnavailableCodexState(snapshot.StatusMessage ?? "Codex is unavailable.");
             return;
         }
 
-        _codexIsAvailable = true;
         CodexStatusText.Text = "Live";
         CodexStatusText.Foreground = new SolidColorBrush(Color.FromRgb(103, 230, 167));
         CodexPlanText.Text = $"{snapshot.PlanLabel} · updated now";
         CodexPlanText.ToolTip = null;
-        UpdateProviderSummary();
 
-        ApplyWindow(snapshot.Session, CodexSessionUsageText, CodexSessionProgress, CodexSessionResetText);
-        ApplyWindow(snapshot.Weekly, CodexWeeklyUsageText, CodexWeeklyProgress, CodexWeeklyResetText);
+        ApplyWindow(snapshot.Session, CodexSessionUsageText, CodexSessionProgress, CodexSessionResetText, includeDate: false);
+        ApplyWindow(snapshot.Weekly, CodexWeeklyUsageText, CodexWeeklyProgress, CodexWeeklyResetText, includeDate: true);
 
         if (snapshot.Reserve is UsageWindow reserve)
         {
@@ -183,7 +185,6 @@ public partial class MainWindow : Window
             CodexResetExpiryText.Text = string.Empty;
         }
 
-        UpdatedAtText.Text = $"Codex live · {snapshot.UpdatedAt:HH:mm:ss}";
     }
 
     private void ApplyUnavailableCodexState(string message)
@@ -192,7 +193,6 @@ public partial class MainWindow : Window
         CodexStatusText.Foreground = new SolidColorBrush(Color.FromRgb(240, 184, 137));
         CodexPlanText.Text = message;
         CodexPlanText.ToolTip = message;
-        UpdateProviderSummary();
 
         ClearWindow(CodexSessionUsageText, CodexSessionProgress, CodexSessionResetText);
         ClearWindow(CodexWeeklyUsageText, CodexWeeklyProgress, CodexWeeklyResetText);
@@ -200,14 +200,30 @@ public partial class MainWindow : Window
         CodexReserveProgress.Value = 0;
         CodexResetCreditsText.Text = "Reset credits unavailable";
         CodexResetExpiryText.Text = string.Empty;
-        UpdatedAtText.Text = "Codex unavailable · local data preserved";
+    }
+
+    private void ApplyClaudeSnapshot(AiUsageSnapshot snapshot)
+    {
+        ClaudeConnectionHint.Visibility = snapshot.IsAvailable ? Visibility.Collapsed : Visibility.Visible;
+        ClaudeStatusText.Text = snapshot.IsAvailable ? "Live" : "Unavailable";
+        ClaudeStatusText.Foreground = snapshot.IsAvailable
+            ? new SolidColorBrush(Color.FromRgb(103, 230, 167))
+            : new SolidColorBrush(Color.FromRgb(240, 184, 137));
+        ClaudePlanText.Text = snapshot.IsAvailable
+            ? $"{snapshot.PlanLabel} · updated now"
+            : snapshot.StatusMessage ?? "Claude is unavailable.";
+        ClaudePlanText.ToolTip = snapshot.IsAvailable ? null : snapshot.StatusMessage;
+
+        ApplyWindow(snapshot.Session, ClaudeSessionUsageText, ClaudeSessionProgress, ClaudeSessionResetText, includeDate: false);
+        ApplyWindow(snapshot.Weekly, ClaudeWeeklyUsageText, ClaudeWeeklyProgress, ClaudeWeeklyResetText, includeDate: true);
     }
 
     private static void ApplyWindow(
         UsageWindow? window,
         System.Windows.Controls.TextBlock usageText,
         System.Windows.Controls.ProgressBar progressBar,
-        System.Windows.Controls.TextBlock resetText)
+        System.Windows.Controls.TextBlock resetText,
+        bool includeDate)
     {
         if (window is null)
         {
@@ -218,8 +234,29 @@ public partial class MainWindow : Window
         usageText.Text = FormatPercent(window.UsedPercent);
         progressBar.Value = window.UsedPercent;
         resetText.Text = window.ResetsAt is DateTimeOffset resetsAt
-            ? $"Resets {FormatRemaining(resetsAt, "in ")}"
+            ? FormatResetTime(resetsAt, includeDate)
             : "Reset time unavailable";
+    }
+
+    private static string FormatResetTime(DateTimeOffset resetsAt, bool includeDate)
+    {
+        DateTimeOffset localReset = resetsAt.ToLocalTime();
+        string remaining = FormatRemaining(resetsAt, "in ");
+        string localTime = localReset.ToString("h:mm tt", EnglishCulture);
+
+        if (includeDate)
+        {
+            string localDate = localReset.ToString("MMM d, yyyy", EnglishCulture);
+            return $"Resets {remaining} · {localDate} at {localTime}";
+        }
+
+        DateTime today = DateTimeOffset.Now.Date;
+        string dayLabel = localReset.Date == today.AddDays(1)
+            ? "Tomorrow"
+            : localReset.Date == today
+                ? "Today"
+                : localReset.ToString("MMM d, yyyy", EnglishCulture);
+        return $"Resets {remaining} · {dayLabel} at {localTime}";
     }
 
     private static void ClearWindow(
@@ -246,13 +283,19 @@ public partial class MainWindow : Window
         }
         if (remaining.TotalDays >= 1)
         {
-            return $"{prefix}{(int)remaining.TotalDays}d {remaining.Hours}h";
+            int days = (int)remaining.TotalDays;
+            return remaining.Hours > 0
+                ? $"{prefix}{days}d {remaining.Hours}h"
+                : $"{prefix}{days}d";
         }
         if (remaining.TotalHours >= 1)
         {
-            return $"{prefix}{(int)remaining.TotalHours}h {remaining.Minutes}min";
+            int hours = (int)remaining.TotalHours;
+            return remaining.Minutes > 0
+                ? $"{prefix}{hours}h {remaining.Minutes}m"
+                : $"{prefix}{hours}h";
         }
-        return $"{prefix}{Math.Max(1, remaining.Minutes)}min";
+        return $"{prefix}{Math.Max(1, remaining.Minutes)}m";
     }
 
     private void MainWindow_Closed(object? sender, EventArgs e)
@@ -262,6 +305,7 @@ public partial class MainWindow : Window
         _lifetimeCancellation.Cancel();
         _lifetimeCancellation.Dispose();
         _codexUsageProvider.Dispose();
+        _claudeUsageProvider.Dispose();
     }
 
     private void SettingsButton_Click(object sender, RoutedEventArgs e)
@@ -308,23 +352,6 @@ public partial class MainWindow : Window
         }
 
         NoProvidersMessage.Visibility = visibleCards.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-        UpdateProviderSummary();
-    }
-
-    private void UpdateProviderSummary()
-    {
-        int visibleCount = _providerOptions.Count(item => item.IsVisible);
-        if (visibleCount == 0)
-        {
-            ConnectedServicesText.Text = "No services displayed";
-            return;
-        }
-
-        string serviceLabel = visibleCount == 1 ? "service displayed" : "services displayed";
-        string codexState = _providerOptions.Any(item => item.ProviderId == "codex" && item.IsVisible)
-            ? _codexIsAvailable ? " · Codex live" : " · Codex offline"
-            : string.Empty;
-        ConnectedServicesText.Text = $"{visibleCount} {serviceLabel}{codexState}";
     }
 
     private void DragHandle_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
