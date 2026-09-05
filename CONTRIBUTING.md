@@ -1,6 +1,6 @@
-# Contributing to AI Usage Gadget
+# Contributing to AI Usage Monitor
 
-Thank you for helping improve AI Usage Gadget. Bug reports, ideas, documentation improvements, and code contributions are welcome.
+Thank you for helping improve AI Usage Monitor. Bug reports, ideas, documentation improvements, and code contributions are welcome.
 
 ## Before you start
 

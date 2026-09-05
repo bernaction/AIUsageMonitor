@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-AI Usage Gadget is currently an early-stage project. Security fixes are applied to the latest version on the `main` branch.
+AI Usage Monitor is currently an early-stage project. Security fixes are applied to the latest version on the `main` branch.
 
 ## Reporting a vulnerability
 

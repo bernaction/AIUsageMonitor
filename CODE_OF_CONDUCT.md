@@ -2,7 +2,7 @@
 
 ## Our commitment
 
-We are committed to making participation in AI Usage Gadget a respectful, harassment-free experience for everyone, regardless of background, identity, experience level, or point of view.
+We are committed to making participation in AI Usage Monitor a respectful, harassment-free experience for everyone, regardless of background, identity, experience level, or point of view.
 
 ## Expected behavior
 

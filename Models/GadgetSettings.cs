@@ -1,4 +1,4 @@
-namespace AIUsageGadget.Models;
+namespace AIUsageMonitor.Models;
 
 public sealed class GadgetSettings
 {

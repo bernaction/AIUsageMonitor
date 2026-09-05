@@ -1,6 +1,6 @@
-using AIUsageGadget.Models;
+using AIUsageMonitor.Models;
 
-namespace AIUsageGadget.Services;
+namespace AIUsageMonitor.Services;
 
 public interface IAiUsageProvider : IDisposable
 {

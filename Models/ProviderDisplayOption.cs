@@ -1,7 +1,7 @@
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 
-namespace AIUsageGadget.Models;
+namespace AIUsageMonitor.Models;
 
 public sealed class ProviderDisplayOption : INotifyPropertyChanged
 {

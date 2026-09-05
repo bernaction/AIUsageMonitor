@@ -1,8 +1,8 @@
 using System.IO;
 using System.Text.Json;
-using AIUsageGadget.Models;
+using AIUsageMonitor.Models;
 
-namespace AIUsageGadget.Services;
+namespace AIUsageMonitor.Services;
 
 public sealed class GadgetSettingsStore
 {
@@ -18,7 +18,7 @@ public sealed class GadgetSettingsStore
     {
         _settingsPath = settingsPath ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "AIUsageGadget",
+            "AIUsageMonitor",
             "settings.json");
     }
 

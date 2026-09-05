@@ -1,4 +1,4 @@
-# AI Usage Gadget
+# AI Usage Monitor
 
 A lightweight Windows desktop gadget that brings AI service usage limits into a single, glanceable view.
 
@@ -16,7 +16,7 @@ A lightweight Windows desktop gadget that brings AI service usage limits into a 
 - Configurable provider visibility, ordering, and refresh interval.
 - Resizable layout with scrolling when needed.
 
-Preferences are stored in `%APPDATA%\AIUsageGadget\settings.json`.
+Preferences are stored in `%APPDATA%\AIUsageMonitor\settings.json`.
 
 ## Requirements
 
@@ -27,8 +27,8 @@ Preferences are stored in `%APPDATA%\AIUsageGadget\settings.json`.
 ## Run locally
 
 ```powershell
-git clone https://github.com/bernaction/AIUsageGadget.git
-cd AIUsageGadget
+git clone https://github.com/bernaction/AIUsageMonitor.git
+cd AIUsageMonitor
 dotnet restore
 dotnet run
 ```
@@ -51,7 +51,7 @@ Services/               Provider integration and settings persistence
 App.xaml                WPF application resources
 MainWindow.xaml         Window layout and styles
 MainWindow.xaml.cs      UI behavior and provider presentation
-AIUsageGadget.csproj    .NET project configuration
+AIUsageMonitor.csproj   .NET project configuration
 ```
 
 ## Contributing

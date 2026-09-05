@@ -8,10 +8,10 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
-using AIUsageGadget.Models;
-using AIUsageGadget.Services;
+using AIUsageMonitor.Models;
+using AIUsageMonitor.Services;
 
-namespace AIUsageGadget;
+namespace AIUsageMonitor;
 
 public partial class MainWindow : Window
 {

@@ -4,9 +4,9 @@ using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text.Json;
-using AIUsageGadget.Models;
+using AIUsageMonitor.Models;
 
-namespace AIUsageGadget.Services;
+namespace AIUsageMonitor.Services;
 
 public sealed class CodexUsageProvider : IAiUsageProvider
 {
@@ -139,7 +139,7 @@ public sealed class CodexUsageProvider : IAiUsageProvider
         using HttpRequestMessage request = new(HttpMethod.Get, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", credentials.AccessToken);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-        request.Headers.UserAgent.ParseAdd("AIUsageGadget/0.1");
+        request.Headers.UserAgent.ParseAdd("AIUsageMonitor/0.1");
         if (!string.IsNullOrWhiteSpace(credentials.AccountId))
         {
             request.Headers.TryAddWithoutValidation("chatgpt-account-id", credentials.AccountId);

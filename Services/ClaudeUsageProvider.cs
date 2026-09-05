@@ -4,9 +4,9 @@ using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text.Json;
-using AIUsageGadget.Models;
+using AIUsageMonitor.Models;
 
-namespace AIUsageGadget.Services;
+namespace AIUsageMonitor.Services;
 
 public sealed class ClaudeUsageProvider : IAiUsageProvider
 {
@@ -119,7 +119,7 @@ public sealed class ClaudeUsageProvider : IAiUsageProvider
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         request.Headers.TryAddWithoutValidation("anthropic-version", "2023-06-01");
-        request.Headers.UserAgent.ParseAdd("AIUsageGadget/0.1");
+        request.Headers.UserAgent.ParseAdd("AIUsageMonitor/0.1");
 
         using HttpResponseMessage response = await _httpClient.SendAsync(
             request,
