@@ -14,6 +14,19 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using AIUsageMonitor.Models;
 using AIUsageMonitor.Services;
+using Drawing = System.Drawing;
+using Forms = System.Windows.Forms;
+using ButtonBase = System.Windows.Controls.Primitives.ButtonBase;
+using CheckBox = System.Windows.Controls.CheckBox;
+using Color = System.Windows.Media.Color;
+using DragEventArgs = System.Windows.DragEventArgs;
+using DragDropEffects = System.Windows.DragDropEffects;
+using MenuItem = System.Windows.Controls.MenuItem;
+using MouseEventArgs = System.Windows.Input.MouseEventArgs;
+using Panel = System.Windows.Controls.Panel;
+using Point = System.Windows.Point;
+using ScrollBar = System.Windows.Controls.Primitives.ScrollBar;
+using Size = System.Windows.Size;
 
 namespace AIUsageMonitor;
 
@@ -27,17 +40,20 @@ public partial class MainWindow : Window
     private const int WmNcHitTest = 0x0084;
     private const int HtLeft = 10;
     private const int HtRight = 11;
-    private const int HtTop = 12;
-    private const int HtTopLeft = 13;
-    private const int HtTopRight = 14;
-    private const int HtBottom = 15;
-    private const int HtBottomLeft = 16;
-    private const int HtBottomRight = 17;
     private const double ResizeBorderSize = 8;
+    private const double MinimumEmptyGadgetWidth = 220;
+    private const double MinimumEmptyGadgetHeight = 160;
+    private const double GadgetHorizontalChrome = 32;
+    private const double GadgetVerticalChrome = 32;
+    private const double ProviderSectionHorizontalPadding = 8;
+    private const double TextEdgeSafety = 8;
     private static readonly TimeSpan CodexRefreshInterval = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan ClaudeRefreshInterval = TimeSpan.FromMinutes(1);
+    private static readonly TimeSpan TokenUsageRefreshInterval = TimeSpan.FromMinutes(1);
+    private static readonly TimeSpan TokenRollDuration = TimeSpan.FromMilliseconds(520);
 
     private readonly IAiUsageProvider _codexUsageProvider = new CodexUsageProvider();
+    private readonly LocalTokenUsageService _localTokenUsageService = new();
     private readonly ClaudeSessionKeyStore _claudeSessionKeyStore = new();
     private readonly ClaudeWebUsageClient _claudeWebUsageClient = new();
     private readonly ClaudeUsageProvider _claudeUsageProvider;
@@ -46,21 +62,41 @@ public partial class MainWindow : Window
     private readonly CancellationTokenSource _lifetimeCancellation = new();
     private readonly DispatcherTimer _codexRefreshTimer;
     private readonly DispatcherTimer _claudeRefreshTimer;
+    private readonly DispatcherTimer _tokenUsageRefreshTimer;
+    private readonly DispatcherTimer _tokenRollTimer;
+    private readonly Stopwatch _tokenRollStopwatch = new();
     private readonly ObservableCollection<ProviderDisplayOption> _providerOptions = [];
     private readonly Dictionary<string, FrameworkElement> _providerCards = new(StringComparer.OrdinalIgnoreCase);
+    private StackPanel _claudeConnectControls = null!;
+    private PasswordBox _claudeSessionKeyPasswordBox = null!;
+    private System.Windows.Controls.Button _saveClaudeSessionKeyButton = null!;
+    private TextBlock _claudeConnectionStatusText = null!;
+    private System.Windows.Controls.Button _disconnectClaudeButton = null!;
     private HwndSource? _windowSource;
+    private SettingsWindow? _settingsWindow;
+    private Forms.NotifyIcon? _trayIcon;
+    private Forms.ToolStripMenuItem? _trayAlwaysOnTopMenuItem;
+    private readonly Dictionary<double, Forms.ToolStripMenuItem> _trayFontSizeItems = [];
+    private Drawing.Icon? _trayIconResource;
     private Point _dragStart;
     private ProviderDisplayOption? _draggedProvider;
     private Uri? _latestReleaseUrl;
     private bool _isRefreshingCodex;
     private bool _isRefreshingClaude;
+    private bool _isRefreshingTokenUsage;
     private bool _isCheckingForUpdates;
     private bool _settingsLoaded;
+    private bool _minimumSizeUpdatePending;
+    private bool _isUpdatingMinimumSize;
+    private long? _displayedTokenTotal;
+    private string _tokenRollTargetText = string.Empty;
 
     public MainWindow()
     {
         InitializeComponent();
+        InitializeSettingsWindow();
         _claudeUsageProvider = new ClaudeUsageProvider(_claudeSessionKeyStore, _claudeWebUsageClient);
+        InitializeTrayIcon();
 
         AboutVersionText.Text = $"Version {GetApplicationVersion().ToString(3)}";
 
@@ -72,6 +108,14 @@ public partial class MainWindow : Window
         {
             Interval = ClaudeRefreshInterval
         };
+        _tokenUsageRefreshTimer = new DispatcherTimer
+        {
+            Interval = TokenUsageRefreshInterval
+        };
+        _tokenRollTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(40)
+        };
         _providerOptions.Add(new ProviderDisplayOption("codex", "Codex", "Live limits from the local session"));
         _providerOptions.Add(new ProviderDisplayOption("claude", "Claude", "Live limits from the protected Claude Web session"));
         _providerOptions.Add(new ProviderDisplayOption("gemini", "Gemini", "Not connected yet"));
@@ -81,9 +125,12 @@ public partial class MainWindow : Window
         ProviderSettingsList.ItemsSource = _providerOptions;
         _codexRefreshTimer.Tick += CodexRefreshTimer_Tick;
         _claudeRefreshTimer.Tick += ClaudeRefreshTimer_Tick;
+        _tokenUsageRefreshTimer.Tick += TokenUsageRefreshTimer_Tick;
+        _tokenRollTimer.Tick += TokenRollTimer_Tick;
         SourceInitialized += MainWindow_SourceInitialized;
         Loaded += MainWindow_Loaded;
         Closed += MainWindow_Closed;
+        SizeChanged += MainWindow_SizeChanged;
     }
 
     private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
@@ -91,7 +138,12 @@ public partial class MainWindow : Window
         await LoadSettingsAsync();
         _codexRefreshTimer.Start();
         _claudeRefreshTimer.Start();
-        await Task.WhenAll(RefreshCodexUsageAsync(), RefreshClaudeUsageAsync(), CheckForUpdatesAsync());
+        _tokenUsageRefreshTimer.Start();
+        await Task.WhenAll(
+            RefreshCodexUsageAsync(),
+            RefreshClaudeUsageAsync(),
+            RefreshTokenUsageAsync(),
+            CheckForUpdatesAsync());
     }
 
     private async Task LoadSettingsAsync()
@@ -121,6 +173,8 @@ public partial class MainWindow : Window
                 _providerOptions.Add(option);
             }
 
+            Topmost = settings.AlwaysOnTop;
+            ApplyFontScale(settings.FontScale);
         }
 
         _settingsLoaded = true;
@@ -136,6 +190,11 @@ public partial class MainWindow : Window
     private async void ClaudeRefreshTimer_Tick(object? sender, EventArgs e)
     {
         await RefreshClaudeUsageAsync();
+    }
+
+    private async void TokenUsageRefreshTimer_Tick(object? sender, EventArgs e)
+    {
+        await RefreshTokenUsageAsync();
     }
 
     private async Task RefreshCodexUsageAsync()
@@ -184,6 +243,138 @@ public partial class MainWindow : Window
         }
     }
 
+    private async Task RefreshTokenUsageAsync()
+    {
+        if (_isRefreshingTokenUsage)
+        {
+            return;
+        }
+
+        _isRefreshingTokenUsage = true;
+        try
+        {
+            TokenUsageSnapshot snapshot = await _localTokenUsageService.GetTodayUsageAsync(
+                _lifetimeCancellation.Token);
+            ApplyTokenUsageSnapshot(snapshot);
+        }
+        catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
+        {
+            // The window is closing; no UI update is needed.
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            StopTokenRollAnimation();
+            _displayedTokenTotal = null;
+            TotalTokensText.Text = "—";
+            EstimatedCostText.Text = "$—";
+            TokenSummaryGrid.ToolTip = "Local token history could not be read.";
+            ScheduleMinimumGadgetSizeUpdate();
+        }
+        finally
+        {
+            _isRefreshingTokenUsage = false;
+        }
+    }
+
+    private void ApplyTokenUsageSnapshot(TokenUsageSnapshot snapshot)
+    {
+        AnimateTokenTotal(snapshot.TotalTokens);
+        string estimatedCostPrefix = snapshot.UnpricedTokens > 0 ? "≥ $" : "$";
+        EstimatedCostText.Text = $"{estimatedCostPrefix}{snapshot.EstimatedCostUsd.ToString("F4", EnglishCulture)}";
+
+        string[] providerLines = snapshot.Providers
+            .Where(provider => provider.TotalTokens > 0)
+            .Select(provider =>
+            {
+                string name = provider.ProviderId.Equals("codex", StringComparison.OrdinalIgnoreCase)
+                    ? "Codex"
+                    : provider.ProviderId.Equals("claude", StringComparison.OrdinalIgnoreCase)
+                        ? "Claude"
+                        : provider.ProviderId;
+                string costPrefix = provider.UnpricedTokens > 0 ? "≥ $" : "$";
+                return $"{name}: {provider.TotalTokens.ToString("N0", EnglishCulture)} tokens · {costPrefix}{provider.EstimatedCostUsd.ToString("F4", EnglishCulture)}";
+            })
+            .ToArray();
+        string details = providerLines.Length > 0
+            ? string.Join(Environment.NewLine, providerLines)
+            : "No local token usage recorded today.";
+        if (snapshot.UnpricedTokens > 0)
+        {
+            details += $"{Environment.NewLine}The estimate excludes {snapshot.UnpricedTokens.ToString("N0", EnglishCulture)} tokens from unknown models.";
+        }
+        TokenSummaryGrid.ToolTip = details;
+        ScheduleMinimumGadgetSizeUpdate();
+    }
+
+    private void AnimateTokenTotal(long totalTokens)
+    {
+        string targetText = totalTokens.ToString("N0", EnglishCulture);
+        if (_displayedTokenTotal == totalTokens)
+        {
+            if (!_tokenRollTimer.IsEnabled)
+            {
+                TotalTokensText.Text = targetText;
+            }
+            return;
+        }
+
+        _displayedTokenTotal = totalTokens;
+        _tokenRollTargetText = targetText;
+        _tokenRollStopwatch.Restart();
+        _tokenRollTimer.Start();
+        RenderTokenRollFrame(0);
+    }
+
+    private void TokenRollTimer_Tick(object? sender, EventArgs e)
+    {
+        double progress = Math.Clamp(
+            _tokenRollStopwatch.Elapsed.TotalMilliseconds / TokenRollDuration.TotalMilliseconds,
+            0,
+            1);
+        if (progress >= 1)
+        {
+            TotalTokensText.Text = _tokenRollTargetText;
+            StopTokenRollAnimation();
+            ScheduleMinimumGadgetSizeUpdate();
+            return;
+        }
+
+        RenderTokenRollFrame(progress);
+    }
+
+    private void RenderTokenRollFrame(double progress)
+    {
+        char[] characters = _tokenRollTargetText.ToCharArray();
+        int digitCount = characters.Count(char.IsDigit);
+        int lockedDigits = progress <= 0.38
+            ? 0
+            : Math.Clamp((int)Math.Floor((progress - 0.38) / 0.5 * digitCount), 0, digitCount);
+        int digitIndex = 0;
+
+        for (int index = 0; index < characters.Length; index++)
+        {
+            if (!char.IsDigit(characters[index]))
+            {
+                continue;
+            }
+
+            if (digitIndex >= lockedDigits)
+            {
+                bool isLeadingDigit = digitIndex == 0 && digitCount > 1;
+                characters[index] = (char)('0' + Random.Shared.Next(isLeadingDigit ? 1 : 0, 10));
+            }
+            digitIndex++;
+        }
+
+        TotalTokensText.Text = new string(characters);
+    }
+
+    private void StopTokenRollAnimation()
+    {
+        _tokenRollTimer.Stop();
+        _tokenRollStopwatch.Stop();
+    }
+
     private void ApplyCodexSnapshot(AiUsageSnapshot snapshot)
     {
         if (!snapshot.IsAvailable)
@@ -194,7 +385,7 @@ public partial class MainWindow : Window
 
         CodexStatusText.Text = "Live";
         CodexStatusText.Foreground = new SolidColorBrush(Color.FromRgb(103, 230, 167));
-        CodexPlanText.Text = $"{snapshot.PlanLabel} · updated now";
+        CodexPlanText.Text = snapshot.PlanLabel;
         CodexPlanText.ToolTip = null;
 
         ApplyWindow(snapshot.Session, CodexSessionUsageText, CodexSessionProgress, CodexSessionResetText, includeDate: false);
@@ -227,6 +418,7 @@ public partial class MainWindow : Window
             CodexResetExpiryText.Text = string.Empty;
         }
 
+        ScheduleMinimumGadgetSizeUpdate();
     }
 
     private void ApplyUnavailableCodexState(string message)
@@ -242,6 +434,7 @@ public partial class MainWindow : Window
         CodexReserveProgress.Value = 0;
         CodexResetCreditsText.Text = "Reset credits unavailable";
         CodexResetExpiryText.Text = string.Empty;
+        ScheduleMinimumGadgetSizeUpdate();
     }
 
     private void ApplyClaudeSnapshot(AiUsageSnapshot snapshot)
@@ -259,7 +452,7 @@ public partial class MainWindow : Window
             ? new SolidColorBrush(Color.FromRgb(103, 230, 167))
             : new SolidColorBrush(Color.FromRgb(240, 184, 137));
         ClaudePlanText.Text = snapshot.IsAvailable
-            ? $"{snapshot.PlanLabel} · updated now"
+            ? snapshot.PlanLabel
             : snapshot.StatusMessage ?? "Claude is unavailable.";
         ClaudePlanText.ToolTip = snapshot.IsAvailable ? null : snapshot.StatusMessage;
         ClaudeConnectionHintText.Text = snapshot.IssueKind switch
@@ -274,6 +467,7 @@ public partial class MainWindow : Window
 
         ApplyWindow(snapshot.Session, ClaudeSessionUsageText, ClaudeSessionProgress, ClaudeSessionResetText, includeDate: false);
         ApplyWindow(snapshot.Weekly, ClaudeWeeklyUsageText, ClaudeWeeklyProgress, ClaudeWeeklyResetText, includeDate: true);
+        ScheduleMinimumGadgetSizeUpdate();
     }
 
     private static void ApplyWindow(
@@ -360,6 +554,8 @@ public partial class MainWindow : Window
     {
         _codexRefreshTimer.Stop();
         _claudeRefreshTimer.Stop();
+        _tokenUsageRefreshTimer.Stop();
+        StopTokenRollAnimation();
         _windowSource?.RemoveHook(WindowProcedure);
         _lifetimeCancellation.Cancel();
         _lifetimeCancellation.Dispose();
@@ -367,23 +563,18 @@ public partial class MainWindow : Window
         _claudeUsageProvider.Dispose();
         _claudeWebUsageClient.Dispose();
         _updateService.Dispose();
-    }
-
-    private void SettingsButton_Click(object sender, RoutedEventArgs e)
-    {
-        UpdateClaudeConnectionSettings();
-        ShowView(SettingsView);
+        _settingsWindow?.ClosePermanently();
+        if (_trayIcon is not null)
+        {
+            _trayIcon.Visible = false;
+            _trayIcon.Dispose();
+        }
+        _trayIconResource?.Dispose();
     }
 
     private void CloseSettingsButton_Click(object sender, RoutedEventArgs e)
     {
-        ShowView(DashboardView);
-    }
-
-    private void AboutButton_Click(object sender, RoutedEventArgs e)
-    {
-        AboutHintText.Text = string.Empty;
-        ShowView(AboutView);
+        _settingsWindow?.Hide();
     }
 
     private void CloseAboutButton_Click(object sender, RoutedEventArgs e)
@@ -413,28 +604,28 @@ public partial class MainWindow : Window
 
     private async void SaveClaudeSessionKeyButton_Click(object sender, RoutedEventArgs e)
     {
-        string sessionKey = ClaudeSessionKeyPasswordBox.Password;
+        string sessionKey = _claudeSessionKeyPasswordBox.Password;
         if (string.IsNullOrWhiteSpace(sessionKey))
         {
-            ClaudeConnectionStatusText.Text = "Paste the sessionKey value first.";
-            ClaudeConnectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(240, 184, 137));
+            _claudeConnectionStatusText.Text = "Paste the sessionKey value first.";
+            _claudeConnectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(240, 184, 137));
             return;
         }
 
-        SaveClaudeSessionKeyButton.IsEnabled = false;
+        _saveClaudeSessionKeyButton.IsEnabled = false;
         _claudeRefreshTimer.Stop();
-        ClaudeConnectionStatusText.Text = "Checking the Claude Web session...";
-        ClaudeConnectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(150, 160, 181));
+        _claudeConnectionStatusText.Text = "Checking the Claude Web session...";
+        _claudeConnectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(150, 160, 181));
         try
         {
             AiUsageSnapshot snapshot = await _claudeUsageProvider.ConnectWebSessionAsync(
                 sessionKey,
                 _lifetimeCancellation.Token);
-            ClaudeSessionKeyPasswordBox.Clear();
-            ClaudeConnectionStatusText.Text = "Connected securely through Claude Web.";
-            ClaudeConnectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(103, 230, 167));
-            DisconnectClaudeButton.IsEnabled = true;
+            _claudeSessionKeyPasswordBox.Clear();
+            _claudeConnectionStatusText.Text = "Connected securely through Claude Web.";
+            _claudeConnectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(103, 230, 167));
             ApplyClaudeSnapshot(snapshot);
+            UpdateClaudeConnectionSettings();
         }
         catch (ArgumentException)
         {
@@ -465,7 +656,7 @@ public partial class MainWindow : Window
         }
         finally
         {
-            SaveClaudeSessionKeyButton.IsEnabled = true;
+            _saveClaudeSessionKeyButton.IsEnabled = true;
             if (!_lifetimeCancellation.IsCancellationRequested)
             {
                 _claudeRefreshTimer.Start();
@@ -478,7 +669,7 @@ public partial class MainWindow : Window
         try
         {
             _claudeUsageProvider.DisconnectWebSession();
-            ClaudeSessionKeyPasswordBox.Clear();
+            _claudeSessionKeyPasswordBox.Clear();
             UpdateClaudeConnectionSettings();
             await RefreshClaudeUsageAsync();
         }
@@ -493,25 +684,29 @@ public partial class MainWindow : Window
         try
         {
             bool isConfigured = _claudeUsageProvider.HasWebSession;
-            ClaudeConnectionStatusText.Text = isConfigured
+            _claudeConnectionStatusText.Text = isConfigured
                 ? "Claude Web sessionKey is saved securely."
                 : "Not connected to Claude Web.";
-            ClaudeConnectionStatusText.Foreground = isConfigured
+            _claudeConnectionStatusText.Foreground = isConfigured
                 ? new SolidColorBrush(Color.FromRgb(103, 230, 167))
                 : new SolidColorBrush(Color.FromRgb(150, 160, 181));
-            DisconnectClaudeButton.IsEnabled = isConfigured;
+            _disconnectClaudeButton.IsEnabled = isConfigured;
+            _claudeConnectControls.Visibility = isConfigured ? Visibility.Collapsed : Visibility.Visible;
+            _disconnectClaudeButton.Visibility = isConfigured ? Visibility.Visible : Visibility.Collapsed;
         }
         catch (Win32Exception)
         {
             ShowClaudeConnectionError("The saved Claude Web session could not be read.");
-            DisconnectClaudeButton.IsEnabled = false;
+            _disconnectClaudeButton.IsEnabled = false;
+            _disconnectClaudeButton.Visibility = Visibility.Collapsed;
+            _claudeConnectControls.Visibility = Visibility.Visible;
         }
     }
 
     private void ShowClaudeConnectionError(string message)
     {
-        ClaudeConnectionStatusText.Text = message;
-        ClaudeConnectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(240, 184, 137));
+        _claudeConnectionStatusText.Text = message;
+        _claudeConnectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(240, 184, 137));
     }
 
     private void ViewReleaseButton_Click(object sender, RoutedEventArgs e)
@@ -543,7 +738,6 @@ public partial class MainWindow : Window
             if (!result.Succeeded)
             {
                 _latestReleaseUrl = null;
-                UpdateAvailableBadge.Visibility = Visibility.Collapsed;
                 ViewReleaseButton.Visibility = Visibility.Collapsed;
                 UpdateStatusText.Text = result.ErrorMessage ?? "The update check failed.";
                 UpdateStatusText.Foreground = new SolidColorBrush(Color.FromRgb(240, 184, 137));
@@ -553,14 +747,12 @@ public partial class MainWindow : Window
             _latestReleaseUrl = result.ReleaseUrl;
             if (result.IsUpdateAvailable)
             {
-                UpdateAvailableBadge.Visibility = Visibility.Visible;
                 ViewReleaseButton.Visibility = Visibility.Visible;
                 UpdateStatusText.Text = $"Version {result.LatestTag} is available.";
                 UpdateStatusText.Foreground = new SolidColorBrush(Color.FromRgb(103, 230, 167));
             }
             else
             {
-                UpdateAvailableBadge.Visibility = Visibility.Collapsed;
                 ViewReleaseButton.Visibility = Visibility.Collapsed;
                 UpdateStatusText.Text = $"You're up to date. Latest stable release: {result.LatestTag}.";
                 UpdateStatusText.Foreground = new SolidColorBrush(Color.FromRgb(197, 204, 218));
@@ -579,8 +771,11 @@ public partial class MainWindow : Window
     private void ShowView(FrameworkElement view)
     {
         DashboardView.Visibility = view == DashboardView ? Visibility.Visible : Visibility.Collapsed;
-        SettingsView.Visibility = view == SettingsView ? Visibility.Visible : Visibility.Collapsed;
         AboutView.Visibility = view == AboutView ? Visibility.Visible : Visibility.Collapsed;
+        if (view == DashboardView)
+        {
+            ScheduleMinimumGadgetSizeUpdate();
+        }
     }
 
     private void OpenExternalUrl(Uri url)
@@ -627,13 +822,18 @@ public partial class MainWindow : Window
 
         for (int index = 0; index < visibleCards.Count; index++)
         {
-            visibleCards[index].Margin = index == visibleCards.Count - 1
-                ? new Thickness(0)
-                : new Thickness(0, 0, 0, 10);
             ProviderCardsPanel.Children.Add(visibleCards[index]);
+            if (index < visibleCards.Count - 1)
+            {
+                ProviderCardsPanel.Children.Add(new Border
+                {
+                    Style = (Style)FindResource("ProviderSeparatorStyle")
+                });
+            }
         }
 
         NoProvidersMessage.Visibility = visibleCards.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        ScheduleMinimumGadgetSizeUpdate();
     }
 
     private void DragHandle_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -716,6 +916,8 @@ public partial class MainWindow : Window
 
         GadgetSettings settings = new()
         {
+            AlwaysOnTop = Topmost,
+            FontScale = DashboardScaleTransform.ScaleX,
             Providers = _providerOptions.Select(item => new ProviderPreference
             {
                 ProviderId = item.ProviderId,
@@ -780,18 +982,7 @@ public partial class MainWindow : Window
 
         bool left = position.X >= 0 && position.X < ResizeBorderSize;
         bool right = position.X <= ActualWidth && position.X > ActualWidth - ResizeBorderSize;
-        bool top = position.Y >= 0 && position.Y < ResizeBorderSize;
-        bool bottom = position.Y <= ActualHeight && position.Y > ActualHeight - ResizeBorderSize;
-
-        int hit = top && left ? HtTopLeft
-            : top && right ? HtTopRight
-            : bottom && left ? HtBottomLeft
-            : bottom && right ? HtBottomRight
-            : left ? HtLeft
-            : right ? HtRight
-            : top ? HtTop
-            : bottom ? HtBottom
-            : 0;
+        int hit = left ? HtLeft : right ? HtRight : 0;
 
         if (hit == 0)
         {
@@ -806,22 +997,329 @@ public partial class MainWindow : Window
     {
         bool isInteractiveControl = FindVisualParent<ButtonBase>(e.OriginalSource as DependencyObject) is not null
             || FindVisualParent<ScrollBar>(e.OriginalSource as DependencyObject) is not null;
-        bool isHeaderArea = e.GetPosition(this).Y <= 82;
-        if (e.ButtonState == MouseButtonState.Pressed && isHeaderArea && !isInteractiveControl)
+        bool canDrag = DashboardView.IsVisible || e.GetPosition(this).Y <= 82;
+        if (e.ButtonState == MouseButtonState.Pressed && canDrag && !isInteractiveControl)
         {
             DragMove();
         }
     }
 
-    private void PinButton_Click(object sender, RoutedEventArgs e)
+    private void InitializeTrayIcon()
     {
-        Topmost = !Topmost;
-        PinButton.Content = Topmost ? "●" : "○";
-        PinButton.ToolTip = Topmost ? "Disable always on top" : "Enable always on top";
+        Drawing.Icon sourceIcon = Drawing.Icon.ExtractAssociatedIcon(Environment.ProcessPath ?? string.Empty)
+            ?? Drawing.SystemIcons.Application;
+        _trayIconResource = (Drawing.Icon)sourceIcon.Clone();
+
+        Forms.ContextMenuStrip trayMenu = new();
+        trayMenu.Items.Add("Show or hide", null, (_, _) => Dispatcher.Invoke(ToggleGadgetVisibility));
+        trayMenu.Items.Add("Settings...", null, (_, _) => Dispatcher.Invoke(OpenSettings));
+
+        Forms.ToolStripMenuItem fontSizeMenu = new("Font size");
+        AddTrayFontSizeItem(fontSizeMenu, "Small", 0.85);
+        AddTrayFontSizeItem(fontSizeMenu, "Default", 1.0);
+        AddTrayFontSizeItem(fontSizeMenu, "Large", 1.15);
+        trayMenu.Items.Add(fontSizeMenu);
+
+        _trayAlwaysOnTopMenuItem = new Forms.ToolStripMenuItem("Always on top", null, (_, _) =>
+            Dispatcher.Invoke(async () => await ToggleAlwaysOnTopAsync()));
+        trayMenu.Items.Add(_trayAlwaysOnTopMenuItem);
+        trayMenu.Items.Add(new Forms.ToolStripSeparator());
+        trayMenu.Items.Add("About...", null, (_, _) => Dispatcher.Invoke(OpenAbout));
+        trayMenu.Items.Add("Exit", null, (_, _) => Dispatcher.Invoke(Close));
+        trayMenu.Opening += (_, _) => Dispatcher.Invoke(UpdateMenuChecks);
+
+        _trayIcon = new Forms.NotifyIcon
+        {
+            ContextMenuStrip = trayMenu,
+            Icon = _trayIconResource,
+            Text = "AI Usage Monitor",
+            Visible = true
+        };
+        _trayIcon.DoubleClick += (_, _) => Dispatcher.Invoke(ToggleGadgetVisibility);
     }
 
-    private void CloseButton_Click(object sender, RoutedEventArgs e)
+    private void AddTrayFontSizeItem(Forms.ToolStripMenuItem parent, string label, double scale)
+    {
+        Forms.ToolStripMenuItem item = new(label, null, (_, _) =>
+            Dispatcher.Invoke(async () => await SetFontScaleAsync(scale)));
+        item.Tag = scale;
+        _trayFontSizeItems.Add(scale, item);
+        parent.DropDownItems.Add(item);
+    }
+
+    private void GadgetContextMenu_Opened(object sender, RoutedEventArgs e)
+    {
+        UpdateMenuChecks();
+    }
+
+    private void ContextSettingsMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        OpenSettings();
+    }
+
+    private void ContextAboutMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        OpenAbout();
+    }
+
+    private async void AlwaysOnTopMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        await ToggleAlwaysOnTopAsync();
+    }
+
+    private async void FontSizeMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem { Tag: string scaleText }
+            && double.TryParse(scaleText, NumberStyles.Float, CultureInfo.InvariantCulture, out double scale))
+        {
+            await SetFontScaleAsync(scale);
+        }
+    }
+
+    private void ExitMenuItem_Click(object sender, RoutedEventArgs e)
     {
         Close();
+    }
+
+    private void OpenSettings()
+    {
+        ShowGadget();
+        UpdateClaudeConnectionSettings();
+        if (_settingsWindow is null)
+        {
+            return;
+        }
+
+        if (_settingsWindow.Owner is null)
+        {
+            _settingsWindow.Owner = this;
+        }
+
+        _settingsWindow.Show();
+        _settingsWindow.Activate();
+    }
+
+    private void OpenAbout()
+    {
+        ShowGadget();
+        AboutHintText.Text = string.Empty;
+        ShowView(AboutView);
+    }
+
+    private void ToggleGadgetVisibility()
+    {
+        if (IsVisible)
+        {
+            Hide();
+            return;
+        }
+
+        ShowGadget();
+    }
+
+    private void ShowGadget()
+    {
+        Show();
+        if (WindowState == WindowState.Minimized)
+        {
+            WindowState = WindowState.Normal;
+        }
+        Activate();
+    }
+
+    private async Task ToggleAlwaysOnTopAsync()
+    {
+        Topmost = !Topmost;
+        UpdateMenuChecks();
+        await SaveSettingsAsync();
+    }
+
+    private async Task SetFontScaleAsync(double scale)
+    {
+        ApplyFontScale(scale);
+        UpdateMenuChecks();
+        await SaveSettingsAsync();
+    }
+
+    private void ApplyFontScale(double scale)
+    {
+        double safeScale = double.IsFinite(scale) ? Math.Clamp(scale, 0.85, 1.15) : 1.0;
+        DashboardScaleTransform.ScaleX = safeScale;
+        DashboardScaleTransform.ScaleY = safeScale;
+        ScheduleMinimumGadgetSizeUpdate();
+    }
+
+    private void InitializeSettingsWindow()
+    {
+        if (SettingsView.Resources["ClaudeConnectionPanel"] is not FrameworkElement claudeConnectionPanel)
+        {
+            throw new InvalidOperationException("The Claude connection panel could not be created.");
+        }
+
+        _claudeConnectControls = FindRequiredNamedElement<StackPanel>(claudeConnectionPanel, "ClaudeConnectControls");
+        _claudeSessionKeyPasswordBox = FindRequiredNamedElement<PasswordBox>(claudeConnectionPanel, "ClaudeSessionKeyPasswordBox");
+        _saveClaudeSessionKeyButton = FindRequiredNamedElement<System.Windows.Controls.Button>(claudeConnectionPanel, "SaveClaudeSessionKeyButton");
+        _claudeConnectionStatusText = FindRequiredNamedElement<TextBlock>(claudeConnectionPanel, "ClaudeConnectionStatusText");
+        _disconnectClaudeButton = FindRequiredNamedElement<System.Windows.Controls.Button>(claudeConnectionPanel, "DisconnectClaudeButton");
+
+        if (SettingsView.Parent is not Panel parent)
+        {
+            throw new InvalidOperationException("The settings view must be hosted by a panel.");
+        }
+
+        parent.Children.Remove(SettingsView);
+        SettingsView.Visibility = Visibility.Visible;
+        _settingsWindow = new SettingsWindow(SettingsView);
+    }
+
+    private static T FindRequiredNamedElement<T>(DependencyObject root, string name) where T : FrameworkElement
+    {
+        if (root is T { Name: var elementName } match && elementName == name)
+        {
+            return match;
+        }
+
+        for (int index = 0; index < VisualTreeHelper.GetChildrenCount(root); index++)
+        {
+            try
+            {
+                return FindRequiredNamedElement<T>(VisualTreeHelper.GetChild(root, index), name);
+            }
+            catch (InvalidOperationException)
+            {
+                // Continue searching the remaining descendants.
+            }
+        }
+
+        throw new InvalidOperationException($"The settings control '{name}' could not be found.");
+    }
+
+    private void MainWindow_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (!_isUpdatingMinimumSize && e.WidthChanged && DashboardView.IsVisible)
+        {
+            ScheduleMinimumGadgetSizeUpdate();
+        }
+    }
+
+    private void ScheduleMinimumGadgetSizeUpdate()
+    {
+        if (_minimumSizeUpdatePending)
+        {
+            return;
+        }
+
+        _minimumSizeUpdatePending = true;
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
+        {
+            _minimumSizeUpdatePending = false;
+            UpdateMinimumGadgetSize();
+        });
+    }
+
+    private void UpdateMinimumGadgetSize()
+    {
+        if (!DashboardView.IsVisible)
+        {
+            return;
+        }
+
+        double scale = DashboardScaleTransform.ScaleX;
+        double textDrivenContentWidth = GetMinimumContentWidthForVisibleResets();
+        double minimumWidth = Math.Ceiling(Math.Max(
+            MinimumEmptyGadgetWidth * scale,
+            textDrivenContentWidth * scale + GadgetHorizontalChrome));
+        double effectiveWidth = Math.Max(ActualWidth, minimumWidth);
+        double availableWidth = Math.Max(1, (effectiveWidth - GadgetHorizontalChrome) / scale);
+        FrameworkElement measuredContent = DashboardContentPanel;
+        measuredContent.Measure(new Size(availableWidth, double.PositiveInfinity));
+
+        double minimumHeight = Math.Max(
+            MinimumEmptyGadgetHeight,
+            Math.Ceiling(measuredContent.DesiredSize.Height * scale + GadgetVerticalChrome));
+
+        _isUpdatingMinimumSize = true;
+        try
+        {
+            MaxHeight = double.PositiveInfinity;
+            MinWidth = minimumWidth;
+            MinHeight = minimumHeight;
+            MaxHeight = minimumHeight;
+            Height = minimumHeight;
+        }
+        finally
+        {
+            _isUpdatingMinimumSize = false;
+        }
+    }
+
+    private double GetMinimumContentWidthForVisibleResets()
+    {
+        double minimumContentWidth = 0;
+        if (IsProviderVisible("codex"))
+        {
+            minimumContentWidth = Math.Max(minimumContentWidth, MeasureTextWidth(CodexSessionResetText));
+            minimumContentWidth = Math.Max(minimumContentWidth, MeasureTextWidth(CodexWeeklyResetText));
+            minimumContentWidth = Math.Max(
+                minimumContentWidth,
+                MeasureTextWidth(CodexResetCreditsText)
+                    + MeasureTextWidth(CodexResetExpiryText)
+                    + 28);
+        }
+
+        if (IsProviderVisible("claude"))
+        {
+            minimumContentWidth = Math.Max(minimumContentWidth, MeasureTextWidth(ClaudeSessionResetText));
+            minimumContentWidth = Math.Max(minimumContentWidth, MeasureTextWidth(ClaudeWeeklyResetText));
+        }
+
+        return minimumContentWidth + ProviderSectionHorizontalPadding + TextEdgeSafety;
+    }
+
+    private bool IsProviderVisible(string providerId)
+    {
+        return _providerOptions.Any(option =>
+            option.IsVisible
+            && string.Equals(option.ProviderId, providerId, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private double MeasureTextWidth(TextBlock textBlock)
+    {
+        if (string.IsNullOrEmpty(textBlock.Text))
+        {
+            return 0;
+        }
+
+        FormattedText formattedText = new(
+            textBlock.Text,
+            CultureInfo.CurrentUICulture,
+            textBlock.FlowDirection,
+            new Typeface(
+                textBlock.FontFamily,
+                textBlock.FontStyle,
+                textBlock.FontWeight,
+                textBlock.FontStretch),
+            textBlock.FontSize,
+            textBlock.Foreground,
+            VisualTreeHelper.GetDpi(this).PixelsPerDip);
+        return Math.Ceiling(formattedText.WidthIncludingTrailingWhitespace);
+    }
+
+    private void UpdateMenuChecks()
+    {
+        AlwaysOnTopMenuItem.IsChecked = Topmost;
+        if (_trayAlwaysOnTopMenuItem is not null)
+        {
+            _trayAlwaysOnTopMenuItem.Checked = Topmost;
+        }
+
+        double currentScale = DashboardScaleTransform.ScaleX;
+        SmallFontMenuItem.IsChecked = Math.Abs(currentScale - 0.85) < 0.001;
+        DefaultFontMenuItem.IsChecked = Math.Abs(currentScale - 1.0) < 0.001;
+        LargeFontMenuItem.IsChecked = Math.Abs(currentScale - 1.15) < 0.001;
+        foreach ((double scale, Forms.ToolStripMenuItem item) in _trayFontSizeItems)
+        {
+            item.Checked = Math.Abs(currentScale - scale) < 0.001;
+        }
     }
 }
