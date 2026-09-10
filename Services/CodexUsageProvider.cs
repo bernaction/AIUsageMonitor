@@ -419,7 +419,7 @@ public sealed class CodexUsageProvider : IAiUsageProvider
 
     private static string FormatPlanLabel(string value)
     {
-        return string.IsNullOrWhiteSpace(value) ? "Codex plan" : $"{Humanize(value)} plan";
+        return string.IsNullOrWhiteSpace(value) ? "Codex Plan" : $"{Humanize(value)} Plan";
     }
 
     private static string Humanize(string value)

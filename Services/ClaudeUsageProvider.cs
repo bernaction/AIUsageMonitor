@@ -1,8 +1,7 @@
+using System.ComponentModel;
 using System.Globalization;
 using System.IO;
-using System.Net;
 using System.Net.Http;
-using System.Net.Http.Headers;
 using System.Text.Json;
 using AIUsageMonitor.Models;
 
@@ -10,26 +9,87 @@ namespace AIUsageMonitor.Services;
 
 public sealed class ClaudeUsageProvider : IAiUsageProvider
 {
-    private const string UsageUrl = "https://api.anthropic.com/api/oauth/usage";
+    private readonly ClaudeSessionKeyStore _sessionKeyStore;
+    private readonly ClaudeWebUsageClient _webUsageClient;
 
-    private readonly HttpClient _httpClient;
-    private readonly bool _ownsHttpClient;
-
-    public ClaudeUsageProvider(HttpClient? httpClient = null)
+    public ClaudeUsageProvider(
+        ClaudeSessionKeyStore sessionKeyStore,
+        ClaudeWebUsageClient webUsageClient)
     {
-        _ownsHttpClient = httpClient is null;
-        _httpClient = httpClient ?? new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
+        _sessionKeyStore = sessionKeyStore;
+        _webUsageClient = webUsageClient;
     }
 
     public string ProviderId => "claude";
+
+    public bool HasWebSession => _sessionKeyStore.IsConfigured;
+
+    public async Task<AiUsageSnapshot> ConnectWebSessionAsync(
+        string value,
+        CancellationToken cancellationToken = default)
+    {
+        string sessionKey = NormalizeSessionKey(value);
+        using ClaudeWebUsageResult result = await _webUsageClient.GetUsageAsync(
+            sessionKey,
+            replaceBrowserSession: true,
+            cancellationToken);
+        AiUsageSnapshot snapshot = ParseUsage(
+            result.Document.RootElement,
+            DateTimeOffset.Now,
+            result.PlanCode,
+            result.RateLimitTier);
+        _sessionKeyStore.Save(sessionKey);
+        return snapshot;
+    }
+
+    public void DisconnectWebSession() => _sessionKeyStore.Delete();
 
     public async Task<AiUsageSnapshot> GetUsageAsync(CancellationToken cancellationToken = default)
     {
         try
         {
-            string accessToken = await ReadAccessTokenAsync(cancellationToken);
-            using JsonDocument document = await GetUsageDocumentAsync(accessToken, cancellationToken);
-            return ParseUsage(document.RootElement, DateTimeOffset.Now);
+            string? webSessionKey = _sessionKeyStore.Read();
+            if (string.IsNullOrWhiteSpace(webSessionKey))
+            {
+                return AiUsageSnapshot.Unavailable(
+                    ProviderId,
+                    "Connect Claude Web in Settings by pasting your sessionKey.",
+                    ProviderIssueKind.AuthenticationRequired);
+            }
+
+            using ClaudeWebUsageResult webResult = await _webUsageClient.GetUsageAsync(
+                webSessionKey,
+                replaceBrowserSession: false,
+                cancellationToken);
+            return ParseUsage(
+                webResult.Document.RootElement,
+                DateTimeOffset.Now,
+                webResult.PlanCode,
+                webResult.RateLimitTier);
+        }
+        catch (ClaudeWebException exception) when (exception.IsChallenge)
+        {
+            return AiUsageSnapshot.Unavailable(
+                ProviderId,
+                "Claude Web presented a temporary browser verification challenge.");
+        }
+        catch (ClaudeWebException exception) when (exception.StatusCode is 401 or 403)
+        {
+            return AiUsageSnapshot.Unavailable(
+                ProviderId,
+                "The Claude Web session has expired. Paste a new sessionKey.",
+                ProviderIssueKind.AuthenticationRequired);
+        }
+        catch (ClaudeWebException exception) when (exception.StatusCode == 429)
+        {
+            return AiUsageSnapshot.Unavailable(
+                ProviderId,
+                "Claude Web temporarily rate-limited the requests.",
+                ProviderIssueKind.RateLimited);
+        }
+        catch (ClaudeWebException exception)
+        {
+            return AiUsageSnapshot.Unavailable(ProviderId, exception.Message);
         }
         catch (ProviderException exception)
         {
@@ -37,7 +97,7 @@ public sealed class ClaudeUsageProvider : IAiUsageProvider
         }
         catch (UnauthorizedAccessException)
         {
-            return AiUsageSnapshot.Unavailable(ProviderId, "Permission to read the local Claude session was denied.");
+            return AiUsageSnapshot.Unavailable(ProviderId, "Permission to access the Claude Web session was denied.");
         }
         catch (JsonException)
         {
@@ -53,96 +113,43 @@ public sealed class ClaudeUsageProvider : IAiUsageProvider
         }
         catch (IOException)
         {
-            return AiUsageSnapshot.Unavailable(ProviderId, "The local Claude session could not be read.");
+            return AiUsageSnapshot.Unavailable(ProviderId, "The Claude Web session could not be accessed.");
+        }
+        catch (Win32Exception)
+        {
+            return AiUsageSnapshot.Unavailable(ProviderId, "The saved Claude Web session could not be read.");
         }
     }
 
     public void Dispose()
     {
-        if (_ownsHttpClient)
-        {
-            _httpClient.Dispose();
-        }
     }
 
-    private static string ResolveCredentialsPath()
+    private static string NormalizeSessionKey(string value)
     {
-        string? configuredHome = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR");
-        string claudeHome = string.IsNullOrWhiteSpace(configuredHome)
-            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude")
-            : configuredHome;
-        return Path.Combine(claudeHome, ".credentials.json");
+        string sessionKey = value.Trim();
+        if (sessionKey.StartsWith("sessionKey=", StringComparison.OrdinalIgnoreCase))
+        {
+            sessionKey = sessionKey["sessionKey=".Length..];
+        }
+
+        if (!sessionKey.StartsWith("sk-ant-", StringComparison.Ordinal)
+            || sessionKey.Length <= "sk-ant-".Length
+            || sessionKey.Any(character => char.IsWhiteSpace(character) || character == ';'))
+        {
+            throw new ArgumentException(
+                "Paste only the sessionKey value beginning with sk-ant-.",
+                nameof(value));
+        }
+
+        return sessionKey;
     }
 
-    private static async Task<string> ReadAccessTokenAsync(CancellationToken cancellationToken)
-    {
-        string credentialsPath = ResolveCredentialsPath();
-        if (!File.Exists(credentialsPath))
-        {
-            throw new ProviderException("Sign in to Claude Code to enable monitoring.");
-        }
-
-        await using FileStream stream = new(
-            credentialsPath,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.ReadWrite | FileShare.Delete,
-            bufferSize: 4096,
-            useAsync: true);
-        using JsonDocument document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
-
-        JsonElement root = document.RootElement;
-        foreach (string containerName in new[] { "claudeAiOauth", "oauth", "credentials" })
-        {
-            if (TryGetProperty(root, containerName, out JsonElement container))
-            {
-                string token = GetString(container, "accessToken", "access_token");
-                if (!string.IsNullOrWhiteSpace(token))
-                {
-                    return token;
-                }
-            }
-        }
-
-        string rootToken = GetString(root, "accessToken", "access_token");
-        if (!string.IsNullOrWhiteSpace(rootToken))
-        {
-            return rootToken;
-        }
-
-        throw new ProviderException("The local Claude session does not contain a valid token.");
-    }
-
-    private async Task<JsonDocument> GetUsageDocumentAsync(string accessToken, CancellationToken cancellationToken)
-    {
-        using HttpRequestMessage request = new(HttpMethod.Get, UsageUrl);
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-        request.Headers.TryAddWithoutValidation("anthropic-version", "2023-06-01");
-        request.Headers.UserAgent.ParseAdd("AIUsageMonitor/0.1");
-
-        using HttpResponseMessage response = await _httpClient.SendAsync(
-            request,
-            HttpCompletionOption.ResponseHeadersRead,
-            cancellationToken);
-        if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
-        {
-            throw new ProviderException("The Claude session has expired. Sign in again.");
-        }
-        if (response.StatusCode == HttpStatusCode.TooManyRequests)
-        {
-            throw new ProviderException("Claude temporarily rate-limited the requests.");
-        }
-        if (!response.IsSuccessStatusCode)
-        {
-            throw new ProviderException("The Claude usage service is unavailable.");
-        }
-
-        await using Stream content = await response.Content.ReadAsStreamAsync(cancellationToken);
-        return await JsonDocument.ParseAsync(content, cancellationToken: cancellationToken);
-    }
-
-    private static AiUsageSnapshot ParseUsage(JsonElement root, DateTimeOffset now)
+    private static AiUsageSnapshot ParseUsage(
+        JsonElement root,
+        DateTimeOffset now,
+        string? organizationPlanCode = null,
+        string? organizationRateLimitTier = null)
     {
         UsageWindow? session = ParseWindow(root, "five_hour", "fiveHour", "Session", now);
         UsageWindow? weekly = ParseWindow(root, "seven_day", "sevenDay", "Weekly", now);
@@ -151,9 +158,30 @@ public sealed class ClaudeUsageProvider : IAiUsageProvider
             throw new ProviderException("Claude did not return any usage windows.");
         }
 
-        string plan = GetString(root, "plan", "plan_type", "subscription_type", "tier");
-        string planLabel = string.IsNullOrWhiteSpace(plan) ? "Claude plan" : $"{Humanize(plan)} plan";
+        string plan = organizationPlanCode
+            ?? GetString(root, "plan", "plan_type", "subscription_type", "tier");
+        string rateLimitTier = organizationRateLimitTier
+            ?? GetString(root, "rate_limit_tier", "rateLimitTier");
+        string planLabel = FormatPlanLabel(plan, rateLimitTier);
         return new AiUsageSnapshot("claude", planLabel, session, weekly, null, null, now, true, null);
+    }
+
+    private static string FormatPlanLabel(string plan, string rateLimitTier)
+    {
+        string normalizedTier = rateLimitTier.Replace('_', ' ').Replace('-', ' ').ToLowerInvariant();
+        if (string.Equals(plan, "max", StringComparison.OrdinalIgnoreCase))
+        {
+            if (normalizedTier.Contains("20x", StringComparison.Ordinal))
+            {
+                return "Max 20x Plan";
+            }
+            if (normalizedTier.Contains("5x", StringComparison.Ordinal))
+            {
+                return "Max 5x Plan";
+            }
+        }
+
+        return string.IsNullOrWhiteSpace(plan) ? "Claude Plan" : $"{Humanize(plan)} Plan";
     }
 
     private static UsageWindow? ParseWindow(

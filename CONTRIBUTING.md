@@ -6,7 +6,7 @@ Thank you for helping improve AI Usage Monitor. Bug reports, ideas, documentatio
 
 - Search existing issues and pull requests to avoid duplicates.
 - Open an issue before beginning a large change or a change to public behavior.
-- Never include account data, access tokens, `auth.json`, or other credentials in an issue, log, screenshot, commit, or pull request.
+- Never include account data, access tokens, Claude Web `sessionKey` values, `auth.json`, or other credentials in an issue, log, screenshot, commit, or pull request.
 
 ## Development setup
 

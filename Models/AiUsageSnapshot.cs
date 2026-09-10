@@ -10,6 +10,14 @@ public sealed record ResetCreditsInfo(
     int AvailableCount,
     IReadOnlyList<DateTimeOffset> Expirations);
 
+public enum ProviderIssueKind
+{
+    None,
+    AuthenticationRequired,
+    RateLimited,
+    TemporaryFailure
+}
+
 public sealed record AiUsageSnapshot(
     string ProviderId,
     string PlanLabel,
@@ -19,16 +27,21 @@ public sealed record AiUsageSnapshot(
     ResetCreditsInfo? ResetCredits,
     DateTimeOffset UpdatedAt,
     bool IsAvailable,
-    string? StatusMessage)
+    string? StatusMessage,
+    ProviderIssueKind IssueKind = ProviderIssueKind.None)
 {
-    public static AiUsageSnapshot Unavailable(string providerId, string message) => new(
+    public static AiUsageSnapshot Unavailable(
+        string providerId,
+        string message,
+        ProviderIssueKind issueKind = ProviderIssueKind.TemporaryFailure) => new(
         providerId,
-        "Unknown plan",
+        "Unknown Plan",
         null,
         null,
         null,
         null,
         DateTimeOffset.Now,
         false,
-        message);
+        message,
+        issueKind);
 }

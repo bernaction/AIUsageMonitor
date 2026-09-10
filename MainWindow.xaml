@@ -53,6 +53,40 @@
       </Setter>
     </Style>
 
+    <Style x:Key="LinkButtonStyle" TargetType="Button">
+      <Setter Property="Padding" Value="12,7" />
+      <Setter Property="Foreground" Value="#DDE4FF" />
+      <Setter Property="Background" Value="#247C5CFC" />
+      <Setter Property="BorderBrush" Value="#557C5CFC" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="FontFamily" Value="{StaticResource AppFont}" />
+      <Setter Property="FontSize" Value="10.5" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="LinkButtonBorder"
+                    Padding="{TemplateBinding Padding}"
+                    Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}"
+                    CornerRadius="8">
+              <ContentPresenter HorizontalAlignment="Center"
+                                VerticalAlignment="Center" />
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="LinkButtonBorder" Property="Background" Value="#397C5CFC" />
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="LinkButtonBorder" Property="Background" Value="#557C5CFC" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
     <Style x:Key="ModernComboBoxItemStyle" TargetType="{x:Type ComboBoxItem}">
       <Setter Property="Foreground" Value="#E8EBF2" />
       <Setter Property="Background" Value="Transparent" />
@@ -308,7 +342,7 @@
             </Border>
 
             <StackPanel Margin="11,0,0,0" VerticalAlignment="Center">
-              <TextBlock Text="AI Usage"
+              <TextBlock Text="AI Usage Monitor"
                          FontFamily="{StaticResource AppFont}"
                          FontWeight="SemiBold"
                          FontSize="18"
@@ -317,6 +351,29 @@
           </StackPanel>
 
           <StackPanel Grid.Column="1" Orientation="Horizontal">
+            <Grid Margin="4,0,0,0">
+              <Button Style="{StaticResource IconButtonStyle}"
+                      Margin="0"
+                      AutomationProperties.Name="Open About"
+                      Content="i"
+                      FontFamily="Segoe UI"
+                      FontWeight="SemiBold"
+                      FontSize="13"
+                      ToolTip="About"
+                      Click="AboutButton_Click" />
+              <Border x:Name="UpdateAvailableBadge"
+                      Width="8"
+                      Height="8"
+                      Margin="0,-2,-2,0"
+                      HorizontalAlignment="Right"
+                      VerticalAlignment="Top"
+                      Background="#67E6A7"
+                      BorderBrush="#FF1B1D29"
+                      BorderThickness="1"
+                      CornerRadius="4"
+                      IsHitTestVisible="False"
+                      Visibility="Collapsed" />
+            </Grid>
             <Button x:Name="PinButton"
                     Style="{StaticResource IconButtonStyle}"
                     AutomationProperties.Name="Alternar sempre no topo"
@@ -422,7 +479,7 @@
                 </Border>
                 <StackPanel Grid.Column="1" VerticalAlignment="Center">
                   <TextBlock Text="Claude" FontFamily="{StaticResource AppFont}" FontWeight="SemiBold" FontSize="14" Foreground="#F6F7FA" />
-                  <TextBlock x:Name="ClaudePlanText" Text="Sign in to Claude Code to enable monitoring." Margin="0,2,0,0" TextWrapping="Wrap" FontFamily="{StaticResource AppFont}" FontSize="10.5" Foreground="{StaticResource MutedTextBrush}" />
+                  <TextBlock x:Name="ClaudePlanText" Text="Connect Claude Web in Settings." Margin="0,2,0,0" TextWrapping="Wrap" FontFamily="{StaticResource AppFont}" FontSize="10.5" Foreground="{StaticResource MutedTextBrush}" />
                 </StackPanel>
                 <Border Grid.Column="2" Padding="7,3" Background="#142B8B65" CornerRadius="7" VerticalAlignment="Center">
                   <TextBlock x:Name="ClaudeStatusText" Text="Unavailable" FontFamily="{StaticResource AppFont}" FontSize="9.5" Foreground="#F0B889" />
@@ -447,7 +504,8 @@
                 </StackPanel>
               </StackPanel>
               <Border x:Name="ClaudeConnectionHint" Margin="0,11,0,0" Padding="9,7" Background="#12FFFFFF" CornerRadius="9">
-                <TextBlock Text="Sign in to Claude Code to display real usage limits."
+                <TextBlock x:Name="ClaudeConnectionHintText"
+                           Text="Connect Claude Web in Settings to display real usage limits."
                            TextWrapping="Wrap"
                            FontFamily="{StaticResource AppFont}"
                            FontSize="10"
@@ -655,34 +713,89 @@
                   BorderBrush="{StaticResource CardBorderBrush}"
                   BorderThickness="1"
                   CornerRadius="12">
-            <Grid>
-              <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-              </Grid.ColumnDefinitions>
-              <StackPanel VerticalAlignment="Center">
-                <TextBlock Text="Automatic refresh"
-                           FontFamily="{StaticResource AppFont}"
-                           FontWeight="SemiBold"
-                           FontSize="12"
-                           Foreground="#F2F4F8" />
-                <TextBlock Text="Interval between service requests"
-                           Margin="0,2,0,0"
-                           FontFamily="{StaticResource AppFont}"
-                           FontSize="10"
-                           Foreground="{StaticResource MutedTextBrush}" />
-              </StackPanel>
-              <ComboBox x:Name="RefreshIntervalComboBox"
+            <StackPanel>
+              <Grid>
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*" />
+                  <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel>
+                  <TextBlock Text="Claude Web connection"
+                             FontFamily="{StaticResource AppFont}"
+                             FontWeight="SemiBold"
+                             FontSize="12"
+                             Foreground="#F2F4F8" />
+                  <TextBlock Text="Paste the sessionKey from claude.ai browser cookies"
+                             Margin="0,2,0,0"
+                             TextWrapping="Wrap"
+                             FontFamily="{StaticResource AppFont}"
+                             FontSize="10"
+                             Foreground="{StaticResource MutedTextBrush}" />
+                </StackPanel>
+                <Button Grid.Column="1"
+                        Content="Open Claude"
+                        Margin="8,0,0,0"
+                        Style="{StaticResource LinkButtonStyle}"
+                        AutomationProperties.Name="Open Claude usage in browser"
+                        Click="OpenClaudeUsageButton_Click" />
+              </Grid>
+
+              <Grid Margin="0,10,0,0">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="*" />
+                  <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <Border Height="30"
+                        Padding="8,0"
+                        Background="#161A24"
+                        BorderBrush="#35FFFFFF"
+                        BorderThickness="1"
+                        CornerRadius="8">
+                  <PasswordBox x:Name="ClaudeSessionKeyPasswordBox"
+                               Background="Transparent"
+                               BorderThickness="0"
+                               Foreground="#E8EBF2"
+                               CaretBrush="#E8EBF2"
+                               VerticalContentAlignment="Center"
+                               FontFamily="{StaticResource AppFont}"
+                               FontSize="10.5"
+                               AutomationProperties.Name="Claude Web sessionKey"
+                               ToolTip="sessionKey beginning with sk-ant-" />
+                </Border>
+                <Button x:Name="SaveClaudeSessionKeyButton"
                         Grid.Column="1"
-                        Width="78"
-                        Height="28"
-                        VerticalAlignment="Center"
-                        Style="{StaticResource ModernComboBoxStyle}"
-                        AutomationProperties.Name="Refresh interval in minutes"
-                        ToolTip="Refresh interval"
-                        SelectionChanged="RefreshIntervalComboBox_SelectionChanged" />
-            </Grid>
+                        Content="Save &amp; connect"
+                        Margin="8,0,0,0"
+                        Style="{StaticResource LinkButtonStyle}"
+                        Click="SaveClaudeSessionKeyButton_Click" />
+              </Grid>
+
+              <Grid Margin="0,8,0,0">
+                <TextBlock x:Name="ClaudeConnectionStatusText"
+                           Text="Checking connection..."
+                           Margin="0,0,82,0"
+                           VerticalAlignment="Center"
+                           TextWrapping="Wrap"
+                           FontFamily="{StaticResource AppFont}"
+                           FontSize="9.5"
+                           Foreground="{StaticResource MutedTextBrush}" />
+                <Button x:Name="DisconnectClaudeButton"
+                        Content="Disconnect"
+                        HorizontalAlignment="Right"
+                        Padding="8,4"
+                        Foreground="#F0B889"
+                        Background="Transparent"
+                        BorderBrush="#45F0B889"
+                        BorderThickness="1"
+                        Cursor="Hand"
+                        FontFamily="{StaticResource AppFont}"
+                        FontSize="9.5"
+                        IsEnabled="False"
+                        Click="DisconnectClaudeButton_Click" />
+              </Grid>
+            </StackPanel>
           </Border>
+
         </Grid>
 
         <Grid Grid.Row="3" Margin="0,12,0,0">
@@ -702,6 +815,219 @@
                   Cursor="Hand"
                   FontFamily="{StaticResource AppFont}"
                   Click="CloseSettingsButton_Click" />
+        </Grid>
+      </Grid>
+
+      <Grid x:Name="AboutView" Visibility="Collapsed" Margin="18,16,18,14">
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="*" />
+          <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="Auto" />
+          </Grid.ColumnDefinitions>
+          <StackPanel>
+            <TextBlock Text="About"
+                       FontFamily="{StaticResource AppFont}"
+                       FontWeight="SemiBold"
+                       FontSize="18"
+                       Foreground="#F7F8FC" />
+            <TextBlock Text="AI Usage Monitor"
+                       Margin="0,3,0,0"
+                       FontFamily="{StaticResource AppFont}"
+                       FontSize="11"
+                       Foreground="{StaticResource MutedTextBrush}" />
+          </StackPanel>
+          <Button Grid.Column="1"
+                  Style="{StaticResource IconButtonStyle}"
+                  AutomationProperties.Name="Return to gadget"
+                  Content="×"
+                  FontSize="18"
+                  ToolTip="Return to gadget"
+                  Click="CloseAboutButton_Click" />
+        </Grid>
+
+        <ScrollViewer Grid.Row="1"
+                      Margin="0,20,0,0"
+                      VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled"
+                      PanningMode="VerticalOnly">
+          <ScrollViewer.Resources>
+            <Style TargetType="{x:Type ScrollBar}" BasedOn="{StaticResource SlimScrollBarStyle}" />
+          </ScrollViewer.Resources>
+          <StackPanel>
+            <StackPanel HorizontalAlignment="Center">
+              <Border Width="64" Height="64" CornerRadius="19" HorizontalAlignment="Center">
+                <Border.Background>
+                  <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                    <GradientStop Color="#7C5CFC" Offset="0" />
+                    <GradientStop Color="#28C7FA" Offset="1" />
+                  </LinearGradientBrush>
+                </Border.Background>
+                <Viewbox Width="38" Height="38">
+                  <Grid Width="24" Height="24">
+                    <Path Data="M4,17 A9,9 0 1 1 20,17"
+                          Stroke="White"
+                          StrokeThickness="2"
+                          StrokeStartLineCap="Round"
+                          StrokeEndLineCap="Round" />
+                    <Path Data="M12,14 L16.5,9.5"
+                          Stroke="White"
+                          StrokeThickness="2"
+                          StrokeStartLineCap="Round"
+                          StrokeEndLineCap="Round" />
+                    <Ellipse Width="3.5"
+                             Height="3.5"
+                             Fill="White"
+                             HorizontalAlignment="Center"
+                             VerticalAlignment="Top"
+                             Margin="0,12.25,0,0" />
+                  </Grid>
+                </Viewbox>
+              </Border>
+              <TextBlock Text="AI Usage Monitor"
+                         Margin="0,11,0,0"
+                         HorizontalAlignment="Center"
+                         FontFamily="{StaticResource AppFont}"
+                         FontWeight="SemiBold"
+                         FontSize="16"
+                         Foreground="#F7F8FC" />
+              <TextBlock x:Name="AboutVersionText"
+                         Margin="0,3,0,0"
+                         HorizontalAlignment="Center"
+                         FontFamily="{StaticResource AppFont}"
+                         FontSize="10.5"
+                         Foreground="{StaticResource MutedTextBrush}" />
+            </StackPanel>
+
+            <Border Style="{StaticResource ProviderCardStyle}" Margin="0,18,0,10">
+              <StackPanel>
+                <TextBlock Text="ABOUT THE APP"
+                           FontFamily="{StaticResource AppFont}"
+                           FontWeight="SemiBold"
+                           FontSize="9.5"
+                           Foreground="{StaticResource MutedTextBrush}" />
+                <TextBlock Text="A lightweight open-source Windows gadget for keeping AI service usage limits visible at a glance."
+                           Margin="0,7,0,0"
+                           TextWrapping="Wrap"
+                           FontFamily="{StaticResource AppFont}"
+                           FontSize="11"
+                           LineHeight="17"
+                           Foreground="#D5DAE5" />
+                <TextBlock Text="Built with .NET 8 and WPF. Local session credentials are used only to request usage information."
+                           Margin="0,8,0,0"
+                           TextWrapping="Wrap"
+                           FontFamily="{StaticResource AppFont}"
+                           FontSize="10"
+                           LineHeight="15"
+                           Foreground="{StaticResource MutedTextBrush}" />
+              </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource ProviderCardStyle}">
+              <StackPanel>
+                <TextBlock Text="UPDATES"
+                           FontFamily="{StaticResource AppFont}"
+                           FontWeight="SemiBold"
+                           FontSize="9.5"
+                           Foreground="{StaticResource MutedTextBrush}" />
+                <TextBlock x:Name="UpdateStatusText"
+                           Text="Checking GitHub Releases..."
+                           Margin="0,7,0,10"
+                           TextWrapping="Wrap"
+                           FontFamily="{StaticResource AppFont}"
+                           FontSize="10.5"
+                           LineHeight="16"
+                           Foreground="{StaticResource MutedTextBrush}" />
+                <StackPanel Orientation="Horizontal">
+                  <Button x:Name="CheckForUpdatesButton"
+                          Content="Check again"
+                          Style="{StaticResource LinkButtonStyle}"
+                          AutomationProperties.Name="Check GitHub Releases for updates"
+                          Click="CheckForUpdatesButton_Click" />
+                  <Button x:Name="ViewReleaseButton"
+                          Content="View release"
+                          Margin="8,0,0,0"
+                          Style="{StaticResource LinkButtonStyle}"
+                          AutomationProperties.Name="Open the latest AI Usage Monitor release"
+                          Visibility="Collapsed"
+                          Click="ViewReleaseButton_Click" />
+                </StackPanel>
+              </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource ProviderCardStyle}">
+              <StackPanel>
+                <TextBlock Text="CREATED BY"
+                           FontFamily="{StaticResource AppFont}"
+                           FontWeight="SemiBold"
+                           FontSize="9.5"
+                           Foreground="{StaticResource MutedTextBrush}" />
+                <TextBlock Text="bernaction"
+                           Margin="0,6,0,0"
+                           FontFamily="{StaticResource AppFont}"
+                           FontWeight="SemiBold"
+                           FontSize="14"
+                           Foreground="#F2F4F8" />
+                <TextBlock Text="Creator and maintainer of AI Usage Monitor."
+                           Margin="0,3,0,10"
+                           TextWrapping="Wrap"
+                           FontFamily="{StaticResource AppFont}"
+                           FontSize="10.5"
+                           Foreground="{StaticResource MutedTextBrush}" />
+                <Button Content="View GitHub profile"
+                        HorizontalAlignment="Left"
+                        Style="{StaticResource LinkButtonStyle}"
+                        AutomationProperties.Name="Open bernaction GitHub profile"
+                        Click="AuthorLinkButton_Click" />
+              </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource ProviderCardStyle}" Margin="0">
+              <StackPanel>
+                <TextBlock Text="OPEN SOURCE PROJECT"
+                           FontFamily="{StaticResource AppFont}"
+                           FontWeight="SemiBold"
+                           FontSize="9.5"
+                           Foreground="{StaticResource MutedTextBrush}" />
+                <TextBlock Text="Source code, documentation, issues, and contributions are available on GitHub. Licensed under the MIT License."
+                           Margin="0,7,0,10"
+                           TextWrapping="Wrap"
+                           FontFamily="{StaticResource AppFont}"
+                           FontSize="10.5"
+                           LineHeight="16"
+                           Foreground="#D5DAE5" />
+                <Button Content="Open repository"
+                        HorizontalAlignment="Left"
+                        Style="{StaticResource LinkButtonStyle}"
+                        AutomationProperties.Name="Open AI Usage Monitor repository"
+                        Click="RepositoryLinkButton_Click" />
+              </StackPanel>
+            </Border>
+          </StackPanel>
+        </ScrollViewer>
+
+        <Grid Grid.Row="2" Margin="0,12,0,0">
+          <TextBlock x:Name="AboutHintText"
+                     Margin="0,0,70,0"
+                     VerticalAlignment="Center"
+                     FontFamily="{StaticResource AppFont}"
+                     FontSize="10"
+                     Foreground="#F0B889" />
+          <Button Content="Done"
+                  HorizontalAlignment="Right"
+                  Padding="14,7"
+                  Foreground="#EEF1F8"
+                  Background="#247C5CFC"
+                  BorderBrush="#557C5CFC"
+                  BorderThickness="1"
+                  Cursor="Hand"
+                  FontFamily="{StaticResource AppFont}"
+                  Click="CloseAboutButton_Click" />
         </Grid>
       </Grid>
       </Grid>

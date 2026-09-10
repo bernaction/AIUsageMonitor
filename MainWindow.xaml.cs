@@ -1,6 +1,10 @@
 using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Net.Http;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -15,8 +19,10 @@ namespace AIUsageMonitor;
 
 public partial class MainWindow : Window
 {
-    private static readonly int[] RefreshIntervalOptions = [1, 2, 5, 10, 15, 30];
     private static readonly CultureInfo EnglishCulture = CultureInfo.GetCultureInfo("en-US");
+    private static readonly Uri AuthorUrl = new("https://github.com/bernaction");
+    private static readonly Uri RepositoryUrl = new("https://github.com/bernaction/AIUsageMonitor");
+    private static readonly Uri ClaudeUsageUrl = new("https://claude.ai/settings/usage");
 
     private const int WmNcHitTest = 0x0084;
     private const int HtLeft = 10;
@@ -28,39 +34,53 @@ public partial class MainWindow : Window
     private const int HtBottomLeft = 16;
     private const int HtBottomRight = 17;
     private const double ResizeBorderSize = 8;
+    private static readonly TimeSpan CodexRefreshInterval = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan ClaudeRefreshInterval = TimeSpan.FromMinutes(1);
 
     private readonly IAiUsageProvider _codexUsageProvider = new CodexUsageProvider();
-    private readonly IAiUsageProvider _claudeUsageProvider = new ClaudeUsageProvider();
+    private readonly ClaudeSessionKeyStore _claudeSessionKeyStore = new();
+    private readonly ClaudeWebUsageClient _claudeWebUsageClient = new();
+    private readonly ClaudeUsageProvider _claudeUsageProvider;
+    private readonly GitHubReleaseUpdateService _updateService = new();
     private readonly GadgetSettingsStore _settingsStore = new();
     private readonly CancellationTokenSource _lifetimeCancellation = new();
-    private readonly DispatcherTimer _refreshTimer;
+    private readonly DispatcherTimer _codexRefreshTimer;
+    private readonly DispatcherTimer _claudeRefreshTimer;
     private readonly ObservableCollection<ProviderDisplayOption> _providerOptions = [];
     private readonly Dictionary<string, FrameworkElement> _providerCards = new(StringComparer.OrdinalIgnoreCase);
     private HwndSource? _windowSource;
     private Point _dragStart;
     private ProviderDisplayOption? _draggedProvider;
-    private bool _isRefreshing;
+    private Uri? _latestReleaseUrl;
+    private bool _isRefreshingCodex;
+    private bool _isRefreshingClaude;
+    private bool _isCheckingForUpdates;
     private bool _settingsLoaded;
 
     public MainWindow()
     {
         InitializeComponent();
+        _claudeUsageProvider = new ClaudeUsageProvider(_claudeSessionKeyStore, _claudeWebUsageClient);
 
-        _refreshTimer = new DispatcherTimer
+        AboutVersionText.Text = $"Version {GetApplicationVersion().ToString(3)}";
+
+        _codexRefreshTimer = new DispatcherTimer
         {
-            Interval = TimeSpan.FromMinutes(1)
+            Interval = CodexRefreshInterval
+        };
+        _claudeRefreshTimer = new DispatcherTimer
+        {
+            Interval = ClaudeRefreshInterval
         };
         _providerOptions.Add(new ProviderDisplayOption("codex", "Codex", "Live limits from the local session"));
-        _providerOptions.Add(new ProviderDisplayOption("claude", "Claude", "Not connected yet"));
+        _providerOptions.Add(new ProviderDisplayOption("claude", "Claude", "Live limits from the protected Claude Web session"));
         _providerOptions.Add(new ProviderDisplayOption("gemini", "Gemini", "Not connected yet"));
         _providerCards.Add("codex", CodexCard);
         _providerCards.Add("claude", ClaudeCard);
         _providerCards.Add("gemini", GeminiCard);
         ProviderSettingsList.ItemsSource = _providerOptions;
-        RefreshIntervalComboBox.ItemsSource = RefreshIntervalOptions;
-        RefreshIntervalComboBox.SelectedItem = 1;
-
-        _refreshTimer.Tick += RefreshTimer_Tick;
+        _codexRefreshTimer.Tick += CodexRefreshTimer_Tick;
+        _claudeRefreshTimer.Tick += ClaudeRefreshTimer_Tick;
         SourceInitialized += MainWindow_SourceInitialized;
         Loaded += MainWindow_Loaded;
         Closed += MainWindow_Closed;
@@ -69,8 +89,9 @@ public partial class MainWindow : Window
     private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
         await LoadSettingsAsync();
-        _refreshTimer.Start();
-        await RefreshUsageAsync();
+        _codexRefreshTimer.Start();
+        _claudeRefreshTimer.Start();
+        await Task.WhenAll(RefreshCodexUsageAsync(), RefreshClaudeUsageAsync(), CheckForUpdatesAsync());
     }
 
     private async Task LoadSettingsAsync()
@@ -100,37 +121,35 @@ public partial class MainWindow : Window
                 _providerOptions.Add(option);
             }
 
-            int interval = RefreshIntervalOptions.Contains(settings.RefreshIntervalMinutes)
-                ? settings.RefreshIntervalMinutes
-                : 1;
-            RefreshIntervalComboBox.SelectedItem = interval;
-            _refreshTimer.Interval = TimeSpan.FromMinutes(interval);
         }
 
         _settingsLoaded = true;
+        UpdateClaudeConnectionSettings();
         ApplyProviderLayout();
     }
 
-    private async void RefreshTimer_Tick(object? sender, EventArgs e)
+    private async void CodexRefreshTimer_Tick(object? sender, EventArgs e)
     {
-        await RefreshUsageAsync();
+        await RefreshCodexUsageAsync();
     }
 
-    private async Task RefreshUsageAsync()
+    private async void ClaudeRefreshTimer_Tick(object? sender, EventArgs e)
     {
-        if (_isRefreshing)
+        await RefreshClaudeUsageAsync();
+    }
+
+    private async Task RefreshCodexUsageAsync()
+    {
+        if (_isRefreshingCodex)
         {
             return;
         }
 
-        _isRefreshing = true;
+        _isRefreshingCodex = true;
         try
         {
-            Task<AiUsageSnapshot> codexTask = _codexUsageProvider.GetUsageAsync(_lifetimeCancellation.Token);
-            Task<AiUsageSnapshot> claudeTask = _claudeUsageProvider.GetUsageAsync(_lifetimeCancellation.Token);
-            AiUsageSnapshot[] snapshots = await Task.WhenAll(codexTask, claudeTask);
-            ApplyCodexSnapshot(snapshots[0]);
-            ApplyClaudeSnapshot(snapshots[1]);
+            AiUsageSnapshot snapshot = await _codexUsageProvider.GetUsageAsync(_lifetimeCancellation.Token);
+            ApplyCodexSnapshot(snapshot);
         }
         catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
         {
@@ -138,7 +157,30 @@ public partial class MainWindow : Window
         }
         finally
         {
-            _isRefreshing = false;
+            _isRefreshingCodex = false;
+        }
+    }
+
+    private async Task RefreshClaudeUsageAsync()
+    {
+        if (_isRefreshingClaude)
+        {
+            return;
+        }
+
+        _isRefreshingClaude = true;
+        try
+        {
+            AiUsageSnapshot snapshot = await _claudeUsageProvider.GetUsageAsync(_lifetimeCancellation.Token);
+            ApplyClaudeSnapshot(snapshot);
+        }
+        catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
+        {
+            // The window is closing; no UI update is needed.
+        }
+        finally
+        {
+            _isRefreshingClaude = false;
         }
     }
 
@@ -205,7 +247,14 @@ public partial class MainWindow : Window
     private void ApplyClaudeSnapshot(AiUsageSnapshot snapshot)
     {
         ClaudeConnectionHint.Visibility = snapshot.IsAvailable ? Visibility.Collapsed : Visibility.Visible;
-        ClaudeStatusText.Text = snapshot.IsAvailable ? "Live" : "Unavailable";
+        ClaudeStatusText.Text = snapshot.IsAvailable
+            ? "Live"
+            : snapshot.IssueKind switch
+            {
+                ProviderIssueKind.AuthenticationRequired => "Sign-in required",
+                ProviderIssueKind.RateLimited => "Rate limited",
+                _ => "Unavailable"
+            };
         ClaudeStatusText.Foreground = snapshot.IsAvailable
             ? new SolidColorBrush(Color.FromRgb(103, 230, 167))
             : new SolidColorBrush(Color.FromRgb(240, 184, 137));
@@ -213,6 +262,15 @@ public partial class MainWindow : Window
             ? $"{snapshot.PlanLabel} · updated now"
             : snapshot.StatusMessage ?? "Claude is unavailable.";
         ClaudePlanText.ToolTip = snapshot.IsAvailable ? null : snapshot.StatusMessage;
+        ClaudeConnectionHintText.Text = snapshot.IssueKind switch
+        {
+            ProviderIssueKind.AuthenticationRequired =>
+                "Connect Claude Web in Settings by pasting your sessionKey.",
+            ProviderIssueKind.RateLimited =>
+                "Claude is connected. Usage will be checked again automatically.",
+            _ =>
+                "Usage data is temporarily unavailable. The app will try again automatically."
+        };
 
         ApplyWindow(snapshot.Session, ClaudeSessionUsageText, ClaudeSessionProgress, ClaudeSessionResetText, includeDate: false);
         ApplyWindow(snapshot.Weekly, ClaudeWeeklyUsageText, ClaudeWeeklyProgress, ClaudeWeeklyResetText, includeDate: true);
@@ -300,24 +358,248 @@ public partial class MainWindow : Window
 
     private void MainWindow_Closed(object? sender, EventArgs e)
     {
-        _refreshTimer.Stop();
+        _codexRefreshTimer.Stop();
+        _claudeRefreshTimer.Stop();
         _windowSource?.RemoveHook(WindowProcedure);
         _lifetimeCancellation.Cancel();
         _lifetimeCancellation.Dispose();
         _codexUsageProvider.Dispose();
         _claudeUsageProvider.Dispose();
+        _claudeWebUsageClient.Dispose();
+        _updateService.Dispose();
     }
 
     private void SettingsButton_Click(object sender, RoutedEventArgs e)
     {
-        DashboardView.Visibility = Visibility.Collapsed;
-        SettingsView.Visibility = Visibility.Visible;
+        UpdateClaudeConnectionSettings();
+        ShowView(SettingsView);
     }
 
     private void CloseSettingsButton_Click(object sender, RoutedEventArgs e)
     {
-        SettingsView.Visibility = Visibility.Collapsed;
-        DashboardView.Visibility = Visibility.Visible;
+        ShowView(DashboardView);
+    }
+
+    private void AboutButton_Click(object sender, RoutedEventArgs e)
+    {
+        AboutHintText.Text = string.Empty;
+        ShowView(AboutView);
+    }
+
+    private void CloseAboutButton_Click(object sender, RoutedEventArgs e)
+    {
+        ShowView(DashboardView);
+    }
+
+    private void AuthorLinkButton_Click(object sender, RoutedEventArgs e)
+    {
+        OpenExternalUrl(AuthorUrl);
+    }
+
+    private void RepositoryLinkButton_Click(object sender, RoutedEventArgs e)
+    {
+        OpenExternalUrl(RepositoryUrl);
+    }
+
+    private async void CheckForUpdatesButton_Click(object sender, RoutedEventArgs e)
+    {
+        await CheckForUpdatesAsync();
+    }
+
+    private void OpenClaudeUsageButton_Click(object sender, RoutedEventArgs e)
+    {
+        OpenExternalUrl(ClaudeUsageUrl);
+    }
+
+    private async void SaveClaudeSessionKeyButton_Click(object sender, RoutedEventArgs e)
+    {
+        string sessionKey = ClaudeSessionKeyPasswordBox.Password;
+        if (string.IsNullOrWhiteSpace(sessionKey))
+        {
+            ClaudeConnectionStatusText.Text = "Paste the sessionKey value first.";
+            ClaudeConnectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(240, 184, 137));
+            return;
+        }
+
+        SaveClaudeSessionKeyButton.IsEnabled = false;
+        _claudeRefreshTimer.Stop();
+        ClaudeConnectionStatusText.Text = "Checking the Claude Web session...";
+        ClaudeConnectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(150, 160, 181));
+        try
+        {
+            AiUsageSnapshot snapshot = await _claudeUsageProvider.ConnectWebSessionAsync(
+                sessionKey,
+                _lifetimeCancellation.Token);
+            ClaudeSessionKeyPasswordBox.Clear();
+            ClaudeConnectionStatusText.Text = "Connected securely through Claude Web.";
+            ClaudeConnectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(103, 230, 167));
+            DisconnectClaudeButton.IsEnabled = true;
+            ApplyClaudeSnapshot(snapshot);
+        }
+        catch (ArgumentException)
+        {
+            ShowClaudeConnectionError("Paste only the sessionKey value beginning with sk-ant-.");
+        }
+        catch (ClaudeWebException exception) when (exception.IsChallenge)
+        {
+            ShowClaudeConnectionError("Claude Web requested temporary browser verification. Try again shortly.");
+        }
+        catch (ClaudeWebException exception) when (exception.StatusCode is 401 or 403)
+        {
+            ShowClaudeConnectionError("Claude rejected this sessionKey. Sign in again and copy a fresh value.");
+        }
+        catch (ClaudeWebException exception) when (exception.StatusCode == 429)
+        {
+            ShowClaudeConnectionError("Claude temporarily rate-limited the check. Try again shortly.");
+        }
+        catch (Exception exception) when (exception is ClaudeWebException
+            or HttpRequestException
+            or InvalidOperationException
+            or JsonException
+            or Win32Exception)
+        {
+            ShowClaudeConnectionError("The Claude Web session could not be checked.");
+        }
+        catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            SaveClaudeSessionKeyButton.IsEnabled = true;
+            if (!_lifetimeCancellation.IsCancellationRequested)
+            {
+                _claudeRefreshTimer.Start();
+            }
+        }
+    }
+
+    private async void DisconnectClaudeButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            _claudeUsageProvider.DisconnectWebSession();
+            ClaudeSessionKeyPasswordBox.Clear();
+            UpdateClaudeConnectionSettings();
+            await RefreshClaudeUsageAsync();
+        }
+        catch (Win32Exception)
+        {
+            ShowClaudeConnectionError("The saved Claude Web session could not be removed.");
+        }
+    }
+
+    private void UpdateClaudeConnectionSettings()
+    {
+        try
+        {
+            bool isConfigured = _claudeUsageProvider.HasWebSession;
+            ClaudeConnectionStatusText.Text = isConfigured
+                ? "Claude Web sessionKey is saved securely."
+                : "Not connected to Claude Web.";
+            ClaudeConnectionStatusText.Foreground = isConfigured
+                ? new SolidColorBrush(Color.FromRgb(103, 230, 167))
+                : new SolidColorBrush(Color.FromRgb(150, 160, 181));
+            DisconnectClaudeButton.IsEnabled = isConfigured;
+        }
+        catch (Win32Exception)
+        {
+            ShowClaudeConnectionError("The saved Claude Web session could not be read.");
+            DisconnectClaudeButton.IsEnabled = false;
+        }
+    }
+
+    private void ShowClaudeConnectionError(string message)
+    {
+        ClaudeConnectionStatusText.Text = message;
+        ClaudeConnectionStatusText.Foreground = new SolidColorBrush(Color.FromRgb(240, 184, 137));
+    }
+
+    private void ViewReleaseButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_latestReleaseUrl is not null)
+        {
+            OpenExternalUrl(_latestReleaseUrl);
+        }
+    }
+
+    private async Task CheckForUpdatesAsync()
+    {
+        if (_isCheckingForUpdates)
+        {
+            return;
+        }
+
+        _isCheckingForUpdates = true;
+        CheckForUpdatesButton.IsEnabled = false;
+        UpdateStatusText.Text = "Checking GitHub Releases...";
+        UpdateStatusText.Foreground = new SolidColorBrush(Color.FromRgb(150, 160, 181));
+
+        try
+        {
+            Version currentVersion = GetApplicationVersion();
+            UpdateCheckResult result = await _updateService.CheckAsync(
+                currentVersion,
+                _lifetimeCancellation.Token);
+            if (!result.Succeeded)
+            {
+                _latestReleaseUrl = null;
+                UpdateAvailableBadge.Visibility = Visibility.Collapsed;
+                ViewReleaseButton.Visibility = Visibility.Collapsed;
+                UpdateStatusText.Text = result.ErrorMessage ?? "The update check failed.";
+                UpdateStatusText.Foreground = new SolidColorBrush(Color.FromRgb(240, 184, 137));
+                return;
+            }
+
+            _latestReleaseUrl = result.ReleaseUrl;
+            if (result.IsUpdateAvailable)
+            {
+                UpdateAvailableBadge.Visibility = Visibility.Visible;
+                ViewReleaseButton.Visibility = Visibility.Visible;
+                UpdateStatusText.Text = $"Version {result.LatestTag} is available.";
+                UpdateStatusText.Foreground = new SolidColorBrush(Color.FromRgb(103, 230, 167));
+            }
+            else
+            {
+                UpdateAvailableBadge.Visibility = Visibility.Collapsed;
+                ViewReleaseButton.Visibility = Visibility.Collapsed;
+                UpdateStatusText.Text = $"You're up to date. Latest stable release: {result.LatestTag}.";
+                UpdateStatusText.Foreground = new SolidColorBrush(Color.FromRgb(197, 204, 218));
+            }
+        }
+        catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            _isCheckingForUpdates = false;
+            CheckForUpdatesButton.IsEnabled = true;
+        }
+    }
+
+    private void ShowView(FrameworkElement view)
+    {
+        DashboardView.Visibility = view == DashboardView ? Visibility.Visible : Visibility.Collapsed;
+        SettingsView.Visibility = view == SettingsView ? Visibility.Visible : Visibility.Collapsed;
+        AboutView.Visibility = view == AboutView ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void OpenExternalUrl(Uri url)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(url.AbsoluteUri) { UseShellExecute = true });
+            AboutHintText.Text = string.Empty;
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            AboutHintText.Text = "The link could not be opened.";
+        }
+    }
+
+    private static Version GetApplicationVersion()
+    {
+        Version? version = typeof(MainWindow).Assembly.GetName().Version;
+        return version ?? new Version(0, 0, 0);
     }
 
     private async void ProviderVisibilityChanged(object sender, RoutedEventArgs e)
@@ -434,7 +716,6 @@ public partial class MainWindow : Window
 
         GadgetSettings settings = new()
         {
-            RefreshIntervalMinutes = RefreshIntervalComboBox.SelectedItem is int minutes ? minutes : 1,
             Providers = _providerOptions.Select(item => new ProviderPreference
             {
                 ProviderId = item.ProviderId,
@@ -459,24 +740,6 @@ public partial class MainWindow : Window
         {
             SettingsHintText.Text = "Permission to save settings was denied";
         }
-    }
-
-    private async void RefreshIntervalComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (RefreshIntervalComboBox.SelectedItem is not int minutes
-            || !RefreshIntervalOptions.Contains(minutes))
-        {
-            return;
-        }
-
-        _refreshTimer.Interval = TimeSpan.FromMinutes(minutes);
-        if (_refreshTimer.IsEnabled)
-        {
-            _refreshTimer.Stop();
-            _refreshTimer.Start();
-        }
-
-        await SaveSettingsAsync();
     }
 
     private static T? FindVisualParent<T>(DependencyObject? child) where T : DependencyObject
