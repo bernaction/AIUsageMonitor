@@ -20,7 +20,7 @@ A lightweight Windows desktop gadget that brings AI service usage limits into a 
 - Automatic Claude refresh through a protected Claude Web session.
 - Fixed provider-aware refresh intervals: five minutes for Codex and one minute for Claude.
 - Configurable provider visibility and ordering.
-- Resizable layout with scrolling when needed.
+- Compact, scroll-free gadget layout that keeps all selected services visible.
 - Built-in About view with project, author, license, and version information.
 - Automatic update availability checks through the latest stable GitHub Release.
 
@@ -37,17 +37,19 @@ The value is checked before it is saved. AI Usage Monitor never displays the sav
 
 ## Screenshots
 
-AI Usage Monitor keeps usage windows visible at a glance, including session, weekly, reserve, and reset information when provided by the connected service.
+AI Usage Monitor keeps token totals, estimated cost, usage windows, reserve, and reset information visible at a glance.
 
-### Main dashboard
+### Gadget
 
-![AI Usage Monitor dashboard](docs/screenshots/main.png)
+The flat gadget stays compact while combining live Claude and Codex usage on a single surface.
+
+![AI Usage Monitor compact gadget showing token totals and provider usage](docs/screenshots/main.png)
 
 ### Settings
 
-Choose which services are displayed, drag to change their order, and connect Claude Web securely.
+The independent settings window leaves the gadget running while services are shown, hidden, reordered, or connected.
 
-![AI Usage Monitor settings](docs/screenshots/config.png)
+![AI Usage Monitor independent settings window](docs/screenshots/config.png)
 
 ## Requirements
 
