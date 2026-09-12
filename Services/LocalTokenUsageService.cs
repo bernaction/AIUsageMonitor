@@ -7,6 +7,8 @@ namespace AIUsageMonitor.Services;
 
 public sealed class LocalTokenUsageService
 {
+    private readonly AntigravityUsageProvider _antigravityUsageProvider;
+
     private static readonly IReadOnlyDictionary<string, ModelPricing> ExactPricing =
         new Dictionary<string, ModelPricing>(StringComparer.OrdinalIgnoreCase)
         {
@@ -29,33 +31,54 @@ public sealed class LocalTokenUsageService
             ["claude-3-5-haiku"] = new(0.8m, 4m, 0.08m, 1m)
         };
 
-    public Task<TokenUsageSnapshot> GetTodayUsageAsync(CancellationToken cancellationToken = default)
+    public LocalTokenUsageService(AntigravityUsageProvider antigravityUsageProvider)
     {
-        return Task.Run(() => CollectTodayUsage(cancellationToken), cancellationToken);
+        _antigravityUsageProvider = antigravityUsageProvider;
     }
 
-    private static TokenUsageSnapshot CollectTodayUsage(CancellationToken cancellationToken)
+    public async Task<TokenUsageSnapshot> GetTodayUsageAsync(
+        IReadOnlySet<string>? selectedProviderIds = null,
+        CancellationToken cancellationToken = default)
     {
         DateTime localToday = DateTime.Today;
         DateTimeOffset periodStart = new(localToday, TimeZoneInfo.Local.GetUtcOffset(localToday));
         DateTime periodStartUtc = periodStart.UtcDateTime;
         string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
-        ProviderAccumulator codex = CollectCodexUsage(
-            ResolveCodexSessionsPath(userProfile),
-            periodStart,
-            periodStartUtc,
-            cancellationToken);
-        ProviderAccumulator claude = CollectClaudeUsage(
-            Path.Combine(userProfile, ".claude", "projects"),
-            periodStart,
-            periodStartUtc,
-            cancellationToken);
+        Task<(ProviderAccumulator Codex, ProviderAccumulator Claude, ProviderAccumulator Kiro)> fileTask = Task.Run(() =>
+        {
+            ProviderAccumulator codex = IsSelected("codex", selectedProviderIds)
+                ? CollectCodexUsage(
+                    ResolveCodexSessionsPath(userProfile),
+                    periodStart,
+                    periodStartUtc,
+                    cancellationToken)
+                : new ProviderAccumulator();
+            ProviderAccumulator claude = IsSelected("claude", selectedProviderIds)
+                ? CollectClaudeUsage(
+                    Path.Combine(userProfile, ".claude", "projects"),
+                    periodStart,
+                    periodStartUtc,
+                    cancellationToken)
+                : new ProviderAccumulator();
+            ProviderAccumulator kiro = IsSelected("kiro", selectedProviderIds)
+                ? CollectEntries(KiroUsageProvider.CollectTodayTokenEntries(userProfile, periodStart, cancellationToken))
+                : new ProviderAccumulator();
+            return (codex, claude, kiro);
+        }, cancellationToken);
+        Task<IReadOnlyList<LocalTokenEntry>> antigravityTask = IsSelected("antigravity", selectedProviderIds)
+            ? _antigravityUsageProvider.GetTodayTokenEntriesAsync(periodStart, cancellationToken)
+            : Task.FromResult<IReadOnlyList<LocalTokenEntry>>([]);
+
+        (ProviderAccumulator codex, ProviderAccumulator claude, ProviderAccumulator kiro) = await fileTask;
+        ProviderAccumulator antigravity = CollectEntries(await antigravityTask);
 
         ProviderTokenUsage[] providers =
         [
             codex.ToSnapshot("codex"),
-            claude.ToSnapshot("claude")
+            claude.ToSnapshot("claude"),
+            kiro.ToSnapshot("kiro"),
+            antigravity.ToSnapshot("antigravity")
         ];
 
         return new TokenUsageSnapshot(
@@ -64,6 +87,21 @@ public sealed class LocalTokenUsageService
             providers.Sum(provider => provider.UnpricedTokens),
             providers,
             DateTimeOffset.Now);
+    }
+
+    private static bool IsSelected(string providerId, IReadOnlySet<string>? selectedProviderIds)
+    {
+        return selectedProviderIds is null || selectedProviderIds.Contains(providerId);
+    }
+
+    private static ProviderAccumulator CollectEntries(IEnumerable<LocalTokenEntry> entries)
+    {
+        ProviderAccumulator accumulator = new();
+        foreach (LocalTokenEntry entry in entries)
+        {
+            accumulator.Add(entry);
+        }
+        return accumulator;
     }
 
     private static ProviderAccumulator CollectCodexUsage(
@@ -427,6 +465,17 @@ public sealed class LocalTokenUsageService
                 counts.OutputTokens,
                 counts.CacheReadTokens,
                 counts.CacheWriteTokens);
+        }
+
+        public void Add(LocalTokenEntry entry)
+        {
+            TokenCounts counts = new(
+                entry.TotalTokens,
+                Math.Max(0, entry.InputTokens),
+                Math.Max(0, entry.OutputTokens) + Math.Max(0, entry.ReasoningTokens),
+                Math.Max(0, entry.CacheReadTokens),
+                Math.Max(0, entry.CacheWriteTokens));
+            Add(counts, entry.Model, inputIncludesCache: false);
         }
 
         public ProviderTokenUsage ToSnapshot(string providerId)

@@ -6,10 +6,44 @@
         Height="650"
         MinWidth="360"
         MinHeight="520"
+        ResizeMode="NoResize"
         WindowStartupLocation="CenterOwner"
         ShowInTaskbar="False"
         Background="#121420"
         UseLayoutRounding="True">
+  <Window.Resources>
+    <Style x:Key="SettingsTabButtonStyle" TargetType="Button">
+      <Setter Property="Width" Value="38" />
+      <Setter Property="Height" Value="38" />
+      <Setter Property="Padding" Value="9" />
+      <Setter Property="Margin" Value="0,0,0,8" />
+      <Setter Property="Foreground" Value="#96A0B5" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderBrush" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="ToolTipService.InitialShowDelay" Value="350" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="TabBorder"
+                    Padding="{TemplateBinding Padding}"
+                    Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}"
+                    CornerRadius="8">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="TabBorder" Property="Background" Value="#14FFFFFF" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+  </Window.Resources>
   <Border x:Name="ContentHost"
           BorderBrush="#36FFFFFF"
           BorderThickness="1">
@@ -20,5 +54,66 @@
         <GradientStop Color="#FF1A1627" Offset="1" />
       </LinearGradientBrush>
     </Border.Background>
+    <Grid>
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="54" />
+        <ColumnDefinition Width="*" />
+      </Grid.ColumnDefinitions>
+
+      <Grid Background="#2410141E">
+        <Border Width="1"
+                HorizontalAlignment="Right"
+                Background="#24FFFFFF" />
+        <StackPanel Margin="8,14,8,0" VerticalAlignment="Top">
+          <Button x:Name="SettingsTabButton"
+                  Style="{StaticResource SettingsTabButtonStyle}"
+                  ToolTip="Settings"
+                  AutomationProperties.Name="Open Settings tab"
+                  Click="SettingsTabButton_Click">
+            <Viewbox Width="20" Height="20">
+              <Grid Width="24" Height="24">
+                <Path Data="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"
+                      Fill="Transparent"
+                      Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                      StrokeThickness="2"
+                      StrokeStartLineCap="Round"
+                      StrokeEndLineCap="Round"
+                      StrokeLineJoin="Round" />
+                <Ellipse Width="7" Height="7"
+                         Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                         StrokeThickness="2" />
+              </Grid>
+            </Viewbox>
+          </Button>
+          <Button x:Name="AboutTabButton"
+                  Style="{StaticResource SettingsTabButtonStyle}"
+                  ToolTip="About"
+                  AutomationProperties.Name="Open About tab"
+                  Click="AboutTabButton_Click">
+            <Viewbox Width="20" Height="20">
+              <Grid Width="24" Height="24">
+                <Ellipse Width="20" Height="20"
+                         Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                         StrokeThickness="2" />
+                <Path Data="M12 12v4"
+                      Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                      StrokeThickness="2"
+                      StrokeStartLineCap="Round"
+                      StrokeEndLineCap="Round" />
+                <Ellipse Width="2" Height="2"
+                         Margin="0,0,0,8"
+                         VerticalAlignment="Center"
+                         Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" />
+              </Grid>
+            </Viewbox>
+          </Button>
+        </StackPanel>
+      </Grid>
+
+      <Grid Grid.Column="1">
+        <ContentControl x:Name="SettingsContentHost" />
+        <ContentControl x:Name="AboutContentHost" Visibility="Collapsed" />
+      </Grid>
+    </Grid>
   </Border>
 </Window>

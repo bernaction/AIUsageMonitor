@@ -8,7 +8,7 @@
     <Nullable>enable</Nullable>
     <AssemblyName>AIUsageMonitor</AssemblyName>
     <RootNamespace>AIUsageMonitor</RootNamespace>
-    <Version>0.1.2</Version>
+    <Version>0.1.3</Version>
     <ApplicationIcon>Assets\AIUsageMonitor.ico</ApplicationIcon>
   </PropertyGroup>
 

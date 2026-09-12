@@ -6,6 +6,8 @@
 x64/
 x86/
 artifacts/
+dist/
+*.zip
 
 # Visual Studio and JetBrains
 .vs/
@@ -31,6 +33,9 @@ coverage.*
 auth.json
 settings.json
 *.secrets.json
+todo.md
+build-release.ps1
+docs/DISTRIBUTION_GUIDE.md
 
 # Operating system files
 .DS_Store

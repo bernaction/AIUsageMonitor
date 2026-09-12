@@ -13,6 +13,7 @@ public sealed record ResetCreditsInfo(
 public enum ProviderIssueKind
 {
     None,
+    NotDetected,
     AuthenticationRequired,
     RateLimited,
     TemporaryFailure

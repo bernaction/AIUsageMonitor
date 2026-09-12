@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -46,22 +47,31 @@ public partial class MainWindow : Window
     private const double GadgetHorizontalChrome = 32;
     private const double GadgetVerticalChrome = 32;
     private const double ProviderSectionHorizontalPadding = 8;
+    private const double TokenSummaryHorizontalPadding = 8;
+    private const double TokenSummaryColumnGap = 14;
     private const double TextEdgeSafety = 8;
     private static readonly TimeSpan CodexRefreshInterval = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan ClaudeRefreshInterval = TimeSpan.FromMinutes(1);
+    private static readonly TimeSpan KiroRefreshInterval = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan AntigravityRefreshInterval = TimeSpan.FromMinutes(1);
     private static readonly TimeSpan TokenUsageRefreshInterval = TimeSpan.FromMinutes(1);
     private static readonly TimeSpan TokenRollDuration = TimeSpan.FromMilliseconds(520);
 
     private readonly IAiUsageProvider _codexUsageProvider = new CodexUsageProvider();
-    private readonly LocalTokenUsageService _localTokenUsageService = new();
+    private readonly IAiUsageProvider _kiroUsageProvider = new KiroUsageProvider();
+    private readonly AntigravityUsageProvider _antigravityUsageProvider = new();
+    private readonly LocalTokenUsageService _localTokenUsageService;
     private readonly ClaudeSessionKeyStore _claudeSessionKeyStore = new();
     private readonly ClaudeWebUsageClient _claudeWebUsageClient = new();
     private readonly ClaudeUsageProvider _claudeUsageProvider;
     private readonly GitHubReleaseUpdateService _updateService = new();
     private readonly GadgetSettingsStore _settingsStore = new();
+    private readonly WindowsStartupService _windowsStartupService = new();
     private readonly CancellationTokenSource _lifetimeCancellation = new();
     private readonly DispatcherTimer _codexRefreshTimer;
     private readonly DispatcherTimer _claudeRefreshTimer;
+    private readonly DispatcherTimer _kiroRefreshTimer;
+    private readonly DispatcherTimer _antigravityRefreshTimer;
     private readonly DispatcherTimer _tokenUsageRefreshTimer;
     private readonly DispatcherTimer _tokenRollTimer;
     private readonly Stopwatch _tokenRollStopwatch = new();
@@ -79,23 +89,32 @@ public partial class MainWindow : Window
     private readonly Dictionary<double, Forms.ToolStripMenuItem> _trayFontSizeItems = [];
     private Drawing.Icon? _trayIconResource;
     private Point _dragStart;
+    private Point _dragGrabOffset;
     private ProviderDisplayOption? _draggedProvider;
+    private ListBoxItem? _draggedProviderContainer;
+    private ProviderDragAdorner? _providerDragAdorner;
+    private AdornerLayer? _providerDragAdornerLayer;
     private Uri? _latestReleaseUrl;
     private bool _isRefreshingCodex;
     private bool _isRefreshingClaude;
+    private bool _isRefreshingKiro;
+    private bool _isRefreshingAntigravity;
     private bool _isRefreshingTokenUsage;
     private bool _isCheckingForUpdates;
     private bool _settingsLoaded;
+    private bool _isUpdatingWindowsStartupOption;
     private bool _minimumSizeUpdatePending;
     private bool _isUpdatingMinimumSize;
     private long? _displayedTokenTotal;
     private string _tokenRollTargetText = string.Empty;
+    private TokenUsageSnapshot? _latestTokenUsageSnapshot;
 
     public MainWindow()
     {
         InitializeComponent();
         InitializeSettingsWindow();
         _claudeUsageProvider = new ClaudeUsageProvider(_claudeSessionKeyStore, _claudeWebUsageClient);
+        _localTokenUsageService = new LocalTokenUsageService(_antigravityUsageProvider);
         InitializeTrayIcon();
 
         AboutVersionText.Text = $"Version {GetApplicationVersion().ToString(3)}";
@@ -108,6 +127,14 @@ public partial class MainWindow : Window
         {
             Interval = ClaudeRefreshInterval
         };
+        _kiroRefreshTimer = new DispatcherTimer
+        {
+            Interval = KiroRefreshInterval
+        };
+        _antigravityRefreshTimer = new DispatcherTimer
+        {
+            Interval = AntigravityRefreshInterval
+        };
         _tokenUsageRefreshTimer = new DispatcherTimer
         {
             Interval = TokenUsageRefreshInterval
@@ -118,13 +145,19 @@ public partial class MainWindow : Window
         };
         _providerOptions.Add(new ProviderDisplayOption("codex", "Codex", "Live limits from the local session"));
         _providerOptions.Add(new ProviderDisplayOption("claude", "Claude", "Live limits from the protected Claude Web session"));
+        _providerOptions.Add(new ProviderDisplayOption("kiro", "Kiro", "Local limits from the Kiro CLI", isVisible: false));
+        _providerOptions.Add(new ProviderDisplayOption("antigravity", "Antigravity", "Local limits from the running Antigravity IDE", isVisible: false));
         _providerOptions.Add(new ProviderDisplayOption("gemini", "Gemini", "Not connected yet"));
         _providerCards.Add("codex", CodexCard);
         _providerCards.Add("claude", ClaudeCard);
+        _providerCards.Add("kiro", KiroCard);
+        _providerCards.Add("antigravity", AntigravityCard);
         _providerCards.Add("gemini", GeminiCard);
         ProviderSettingsList.ItemsSource = _providerOptions;
         _codexRefreshTimer.Tick += CodexRefreshTimer_Tick;
         _claudeRefreshTimer.Tick += ClaudeRefreshTimer_Tick;
+        _kiroRefreshTimer.Tick += KiroRefreshTimer_Tick;
+        _antigravityRefreshTimer.Tick += AntigravityRefreshTimer_Tick;
         _tokenUsageRefreshTimer.Tick += TokenUsageRefreshTimer_Tick;
         _tokenRollTimer.Tick += TokenRollTimer_Tick;
         SourceInitialized += MainWindow_SourceInitialized;
@@ -138,10 +171,14 @@ public partial class MainWindow : Window
         await LoadSettingsAsync();
         _codexRefreshTimer.Start();
         _claudeRefreshTimer.Start();
+        _kiroRefreshTimer.Start();
+        _antigravityRefreshTimer.Start();
         _tokenUsageRefreshTimer.Start();
         await Task.WhenAll(
             RefreshCodexUsageAsync(),
             RefreshClaudeUsageAsync(),
+            RefreshKiroUsageAsync(),
+            RefreshAntigravityUsageAsync(),
             RefreshTokenUsageAsync(),
             CheckForUpdatesAsync());
     }
@@ -178,8 +215,55 @@ public partial class MainWindow : Window
         }
 
         _settingsLoaded = true;
+        UpdateWindowsStartupOption();
         UpdateClaudeConnectionSettings();
         ApplyProviderLayout();
+    }
+
+    private void UpdateWindowsStartupOption()
+    {
+        _isUpdatingWindowsStartupOption = true;
+        try
+        {
+            StartWithWindowsCheckBox.IsChecked = _windowsStartupService.IsEnabled();
+        }
+        catch (Exception exception) when (exception is InvalidOperationException
+            or IOException
+            or UnauthorizedAccessException
+            or System.Security.SecurityException)
+        {
+            StartWithWindowsCheckBox.IsChecked = false;
+            SettingsHintText.Text = "Windows startup status could not be read";
+        }
+        finally
+        {
+            _isUpdatingWindowsStartupOption = false;
+        }
+    }
+
+    private void StartWithWindowsCheckBox_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_isUpdatingWindowsStartupOption)
+        {
+            return;
+        }
+
+        try
+        {
+            bool enabled = StartWithWindowsCheckBox.IsChecked == true;
+            _windowsStartupService.SetEnabled(enabled);
+            SettingsHintText.Text = enabled
+                ? "AI Usage Monitor will start with Windows"
+                : "Windows startup disabled";
+        }
+        catch (Exception exception) when (exception is InvalidOperationException
+            or IOException
+            or UnauthorizedAccessException
+            or System.Security.SecurityException)
+        {
+            SettingsHintText.Text = "Windows startup setting could not be changed";
+            UpdateWindowsStartupOption();
+        }
     }
 
     private async void CodexRefreshTimer_Tick(object? sender, EventArgs e)
@@ -190,6 +274,16 @@ public partial class MainWindow : Window
     private async void ClaudeRefreshTimer_Tick(object? sender, EventArgs e)
     {
         await RefreshClaudeUsageAsync();
+    }
+
+    private async void KiroRefreshTimer_Tick(object? sender, EventArgs e)
+    {
+        await RefreshKiroUsageAsync();
+    }
+
+    private async void AntigravityRefreshTimer_Tick(object? sender, EventArgs e)
+    {
+        await RefreshAntigravityUsageAsync();
     }
 
     private async void TokenUsageRefreshTimer_Tick(object? sender, EventArgs e)
@@ -253,7 +347,12 @@ public partial class MainWindow : Window
         _isRefreshingTokenUsage = true;
         try
         {
+            HashSet<string> selectedProviderIds = _providerOptions
+                .Where(option => option.IsVisible)
+                .Select(option => option.ProviderId)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
             TokenUsageSnapshot snapshot = await _localTokenUsageService.GetTodayUsageAsync(
+                selectedProviderIds,
                 _lifetimeCancellation.Token);
             ApplyTokenUsageSnapshot(snapshot);
         }
@@ -276,13 +375,67 @@ public partial class MainWindow : Window
         }
     }
 
+    private async Task RefreshKiroUsageAsync()
+    {
+        if (_isRefreshingKiro || !IsProviderVisible("kiro"))
+        {
+            return;
+        }
+
+        _isRefreshingKiro = true;
+        try
+        {
+            ApplyKiroSnapshot(await _kiroUsageProvider.GetUsageAsync(_lifetimeCancellation.Token));
+        }
+        catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            _isRefreshingKiro = false;
+        }
+    }
+
+    private async Task RefreshAntigravityUsageAsync()
+    {
+        if (_isRefreshingAntigravity || !IsProviderVisible("antigravity"))
+        {
+            return;
+        }
+
+        _isRefreshingAntigravity = true;
+        try
+        {
+            ApplyAntigravitySnapshot(await _antigravityUsageProvider.GetUsageAsync(_lifetimeCancellation.Token));
+        }
+        catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            _isRefreshingAntigravity = false;
+        }
+    }
+
     private void ApplyTokenUsageSnapshot(TokenUsageSnapshot snapshot)
     {
-        AnimateTokenTotal(snapshot.TotalTokens);
-        string estimatedCostPrefix = snapshot.UnpricedTokens > 0 ? "≥ $" : "$";
-        EstimatedCostText.Text = $"{estimatedCostPrefix}{snapshot.EstimatedCostUsd.ToString("F4", EnglishCulture)}";
+        _latestTokenUsageSnapshot = snapshot;
+        HashSet<string> selectedProviderIds = _providerOptions
+            .Where(option => option.IsVisible)
+            .Select(option => option.ProviderId)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        ProviderTokenUsage[] selectedProviders = snapshot.Providers
+            .Where(provider => selectedProviderIds.Contains(provider.ProviderId))
+            .ToArray();
+        long totalTokens = selectedProviders.Sum(provider => provider.TotalTokens);
+        decimal estimatedCost = selectedProviders.Sum(provider => provider.EstimatedCostUsd);
+        long unpricedTokens = selectedProviders.Sum(provider => provider.UnpricedTokens);
 
-        string[] providerLines = snapshot.Providers
+        AnimateTokenTotal(totalTokens);
+        string estimatedCostPrefix = unpricedTokens > 0 ? "≥ $" : "$";
+        EstimatedCostText.Text = $"{estimatedCostPrefix}{estimatedCost.ToString("F4", EnglishCulture)}";
+
+        string[] providerLines = selectedProviders
             .Where(provider => provider.TotalTokens > 0)
             .Select(provider =>
             {
@@ -290,7 +443,11 @@ public partial class MainWindow : Window
                     ? "Codex"
                     : provider.ProviderId.Equals("claude", StringComparison.OrdinalIgnoreCase)
                         ? "Claude"
-                        : provider.ProviderId;
+                        : provider.ProviderId.Equals("kiro", StringComparison.OrdinalIgnoreCase)
+                            ? "Kiro"
+                            : provider.ProviderId.Equals("antigravity", StringComparison.OrdinalIgnoreCase)
+                                ? "Antigravity"
+                                : provider.ProviderId;
                 string costPrefix = provider.UnpricedTokens > 0 ? "≥ $" : "$";
                 return $"{name}: {provider.TotalTokens.ToString("N0", EnglishCulture)} tokens · {costPrefix}{provider.EstimatedCostUsd.ToString("F4", EnglishCulture)}";
             })
@@ -298,9 +455,9 @@ public partial class MainWindow : Window
         string details = providerLines.Length > 0
             ? string.Join(Environment.NewLine, providerLines)
             : "No local token usage recorded today.";
-        if (snapshot.UnpricedTokens > 0)
+        if (unpricedTokens > 0)
         {
-            details += $"{Environment.NewLine}The estimate excludes {snapshot.UnpricedTokens.ToString("N0", EnglishCulture)} tokens from unknown models.";
+            details += $"{Environment.NewLine}The estimate excludes {unpricedTokens.ToString("N0", EnglishCulture)} tokens from unknown models.";
         }
         TokenSummaryGrid.ToolTip = details;
         ScheduleMinimumGadgetSizeUpdate();
@@ -470,6 +627,70 @@ public partial class MainWindow : Window
         ScheduleMinimumGadgetSizeUpdate();
     }
 
+    private void ApplyKiroSnapshot(AiUsageSnapshot snapshot)
+    {
+        ApplyProviderStatus(snapshot, KiroStatusText, KiroPlanText, KiroConnectionHint, KiroConnectionHintText,
+            "Install and sign in to the Kiro CLI to display usage limits.");
+        if (snapshot.IsAvailable && snapshot.Session is null)
+        {
+            KiroStatusText.Text = "Managed";
+            KiroConnectionHint.Visibility = Visibility.Visible;
+            KiroConnectionHintText.Text = snapshot.StatusMessage
+                ?? "This managed Kiro plan does not expose credit metrics.";
+        }
+        ApplyWindow(snapshot.Session, KiroPrimaryUsageText, KiroPrimaryProgress, KiroPrimaryResetText, includeDate: true);
+        KiroPrimaryLabelText.Text = snapshot.Session?.Label.ToUpperInvariant() ?? "CREDITS";
+
+        KiroBonusPanel.Visibility = snapshot.Weekly is null ? Visibility.Collapsed : Visibility.Visible;
+        KiroBonusLabelText.Text = snapshot.Weekly?.Label.ToUpperInvariant() ?? "BONUS";
+        ApplyWindow(snapshot.Weekly, KiroBonusUsageText, KiroBonusProgress, KiroBonusResetText, includeDate: true);
+        ScheduleMinimumGadgetSizeUpdate();
+    }
+
+    private void ApplyAntigravitySnapshot(AiUsageSnapshot snapshot)
+    {
+        ApplyProviderStatus(snapshot, AntigravityStatusText, AntigravityPlanText,
+            AntigravityConnectionHint, AntigravityConnectionHintText,
+            "Open and sign in to Antigravity IDE to display usage limits.");
+        AntigravitySessionLabelText.Text = snapshot.Session?.Label.ToUpperInvariant() ?? "SESSION";
+        AntigravityWeeklyLabelText.Text = snapshot.Weekly?.Label.ToUpperInvariant() ?? "WEEKLY";
+        ApplyWindow(snapshot.Session, AntigravitySessionUsageText, AntigravitySessionProgress,
+            AntigravitySessionResetText, includeDate: false);
+        ApplyWindow(snapshot.Weekly, AntigravityWeeklyUsageText, AntigravityWeeklyProgress,
+            AntigravityWeeklyResetText, includeDate: true);
+        ScheduleMinimumGadgetSizeUpdate();
+    }
+
+    private static void ApplyProviderStatus(
+        AiUsageSnapshot snapshot,
+        TextBlock statusText,
+        System.Windows.Documents.Run planText,
+        FrameworkElement connectionHint,
+        TextBlock connectionHintText,
+        string notDetectedMessage)
+    {
+        connectionHint.Visibility = snapshot.IsAvailable ? Visibility.Collapsed : Visibility.Visible;
+        statusText.Text = snapshot.IsAvailable
+            ? "Live"
+            : snapshot.IssueKind switch
+            {
+                ProviderIssueKind.NotDetected => "Not detected",
+                ProviderIssueKind.AuthenticationRequired => "Sign-in required",
+                ProviderIssueKind.RateLimited => "Rate limited",
+                _ => "Unavailable"
+            };
+        statusText.Foreground = snapshot.IsAvailable
+            ? new SolidColorBrush(Color.FromRgb(103, 230, 167))
+            : new SolidColorBrush(Color.FromRgb(240, 184, 137));
+        planText.Text = snapshot.IsAvailable
+            ? snapshot.PlanLabel
+            : snapshot.StatusMessage ?? notDetectedMessage;
+        planText.ToolTip = snapshot.IsAvailable ? null : snapshot.StatusMessage;
+        connectionHintText.Text = snapshot.IssueKind == ProviderIssueKind.NotDetected
+            ? notDetectedMessage
+            : snapshot.StatusMessage ?? "Usage data is temporarily unavailable. The app will try again automatically.";
+    }
+
     private static void ApplyWindow(
         UsageWindow? window,
         System.Windows.Controls.TextBlock usageText,
@@ -554,6 +775,8 @@ public partial class MainWindow : Window
     {
         _codexRefreshTimer.Stop();
         _claudeRefreshTimer.Stop();
+        _kiroRefreshTimer.Stop();
+        _antigravityRefreshTimer.Stop();
         _tokenUsageRefreshTimer.Stop();
         StopTokenRollAnimation();
         _windowSource?.RemoveHook(WindowProcedure);
@@ -561,6 +784,8 @@ public partial class MainWindow : Window
         _lifetimeCancellation.Dispose();
         _codexUsageProvider.Dispose();
         _claudeUsageProvider.Dispose();
+        _kiroUsageProvider.Dispose();
+        _antigravityUsageProvider.Dispose();
         _claudeWebUsageClient.Dispose();
         _updateService.Dispose();
         _settingsWindow?.ClosePermanently();
@@ -579,7 +804,7 @@ public partial class MainWindow : Window
 
     private void CloseAboutButton_Click(object sender, RoutedEventArgs e)
     {
-        ShowView(DashboardView);
+        _settingsWindow?.Hide();
     }
 
     private void AuthorLinkButton_Click(object sender, RoutedEventArgs e)
@@ -600,6 +825,17 @@ public partial class MainWindow : Window
     private void OpenClaudeUsageButton_Click(object sender, RoutedEventArgs e)
     {
         OpenExternalUrl(ClaudeUsageUrl);
+    }
+
+    private void ClaudeSessionKeyPasswordBox_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter || !_saveClaudeSessionKeyButton.IsEnabled)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        _saveClaudeSessionKeyButton.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
     }
 
     private async void SaveClaudeSessionKeyButton_Click(object sender, RoutedEventArgs e)
@@ -768,16 +1004,6 @@ public partial class MainWindow : Window
         }
     }
 
-    private void ShowView(FrameworkElement view)
-    {
-        DashboardView.Visibility = view == DashboardView ? Visibility.Visible : Visibility.Collapsed;
-        AboutView.Visibility = view == AboutView ? Visibility.Visible : Visibility.Collapsed;
-        if (view == DashboardView)
-        {
-            ScheduleMinimumGadgetSizeUpdate();
-        }
-    }
-
     private void OpenExternalUrl(Uri url)
     {
         try
@@ -805,7 +1031,24 @@ public partial class MainWindow : Window
         }
 
         ApplyProviderLayout();
+        if (_latestTokenUsageSnapshot is TokenUsageSnapshot snapshot)
+        {
+            ApplyTokenUsageSnapshot(snapshot);
+        }
         await SaveSettingsAsync();
+        if (sender is CheckBox { DataContext: ProviderDisplayOption enabledOption }
+            && enabledOption.IsVisible)
+        {
+            if (enabledOption.ProviderId.Equals("kiro", StringComparison.OrdinalIgnoreCase))
+            {
+                await RefreshKiroUsageAsync();
+            }
+            else if (enabledOption.ProviderId.Equals("antigravity", StringComparison.OrdinalIgnoreCase))
+            {
+                await RefreshAntigravityUsageAsync();
+            }
+            await RefreshTokenUsageAsync();
+        }
     }
 
     private void ApplyProviderLayout()
@@ -842,6 +1085,11 @@ public partial class MainWindow : Window
         {
             _draggedProvider = option;
             _dragStart = e.GetPosition(ProviderSettingsList);
+            _draggedProviderContainer = FindVisualParent<ListBoxItem>(sender as DependencyObject);
+            if (_draggedProviderContainer is not null)
+            {
+                _dragGrabOffset = e.GetPosition(_draggedProviderContainer);
+            }
         }
     }
 
@@ -860,16 +1108,83 @@ public partial class MainWindow : Window
         }
 
         ProviderDisplayOption dragged = _draggedProvider;
-        DragDrop.DoDragDrop(ProviderSettingsList, dragged, DragDropEffects.Move);
-        _draggedProvider = null;
+        BeginProviderDrag(current);
+        try
+        {
+            DragDrop.DoDragDrop(ProviderSettingsList, dragged, DragDropEffects.Move);
+        }
+        finally
+        {
+            EndProviderDrag();
+        }
     }
 
     private void ProviderSettingsList_DragOver(object sender, DragEventArgs e)
     {
+        _providerDragAdorner?.UpdatePosition(e.GetPosition(ProviderSettingsList));
+        ListBoxItem? targetContainer = FindVisualParent<ListBoxItem>(
+            ProviderSettingsList.InputHitTest(e.GetPosition(ProviderSettingsList)) as DependencyObject);
+        ProviderSettingsList.SelectedItem = targetContainer?.DataContext;
         e.Effects = e.Data.GetDataPresent(typeof(ProviderDisplayOption))
             ? DragDropEffects.Move
             : DragDropEffects.None;
         e.Handled = true;
+    }
+
+    private void ProviderSettingsList_DragLeave(object sender, DragEventArgs e)
+    {
+        ProviderSettingsList.SelectedItem = null;
+    }
+
+    private void ProviderSettingsList_GiveFeedback(object sender, System.Windows.GiveFeedbackEventArgs e)
+    {
+        if (_providerDragAdorner is not null)
+        {
+            Drawing.Point screenPosition = Forms.Cursor.Position;
+            Point position = ProviderSettingsList.PointFromScreen(
+                new Point(screenPosition.X, screenPosition.Y));
+            _providerDragAdorner.UpdatePosition(position);
+        }
+        e.UseDefaultCursors = true;
+        e.Handled = true;
+    }
+
+    private void BeginProviderDrag(Point position)
+    {
+        if (_draggedProviderContainer is null)
+        {
+            return;
+        }
+
+        _providerDragAdornerLayer = AdornerLayer.GetAdornerLayer(ProviderSettingsList);
+        if (_providerDragAdornerLayer is not null)
+        {
+            _providerDragAdorner = new ProviderDragAdorner(
+                ProviderSettingsList,
+                _draggedProviderContainer,
+                _dragGrabOffset);
+            _providerDragAdorner.UpdatePosition(position);
+            _providerDragAdornerLayer.Add(_providerDragAdorner);
+        }
+        _draggedProviderContainer.Opacity = 0.28;
+    }
+
+    private void EndProviderDrag()
+    {
+        if (_providerDragAdornerLayer is not null && _providerDragAdorner is not null)
+        {
+            _providerDragAdornerLayer.Remove(_providerDragAdorner);
+        }
+        if (_draggedProviderContainer is not null)
+        {
+            _draggedProviderContainer.Opacity = 1;
+        }
+
+        ProviderSettingsList.SelectedItem = null;
+        _providerDragAdorner = null;
+        _providerDragAdornerLayer = null;
+        _draggedProviderContainer = null;
+        _draggedProvider = null;
     }
 
     private async void ProviderSettingsList_Drop(object sender, DragEventArgs e)
@@ -1024,7 +1339,6 @@ public partial class MainWindow : Window
             Dispatcher.Invoke(async () => await ToggleAlwaysOnTopAsync()));
         trayMenu.Items.Add(_trayAlwaysOnTopMenuItem);
         trayMenu.Items.Add(new Forms.ToolStripSeparator());
-        trayMenu.Items.Add("About...", null, (_, _) => Dispatcher.Invoke(OpenAbout));
         trayMenu.Items.Add("Exit", null, (_, _) => Dispatcher.Invoke(Close));
         trayMenu.Opening += (_, _) => Dispatcher.Invoke(UpdateMenuChecks);
 
@@ -1057,11 +1371,6 @@ public partial class MainWindow : Window
         OpenSettings();
     }
 
-    private void ContextAboutMenuItem_Click(object sender, RoutedEventArgs e)
-    {
-        OpenAbout();
-    }
-
     private async void AlwaysOnTopMenuItem_Click(object sender, RoutedEventArgs e)
     {
         await ToggleAlwaysOnTopAsync();
@@ -1084,6 +1393,7 @@ public partial class MainWindow : Window
     private void OpenSettings()
     {
         ShowGadget();
+        UpdateWindowsStartupOption();
         UpdateClaudeConnectionSettings();
         if (_settingsWindow is null)
         {
@@ -1095,15 +1405,9 @@ public partial class MainWindow : Window
             _settingsWindow.Owner = this;
         }
 
+        _settingsWindow.ShowSettingsTab();
         _settingsWindow.Show();
         _settingsWindow.Activate();
-    }
-
-    private void OpenAbout()
-    {
-        ShowGadget();
-        AboutHintText.Text = string.Empty;
-        ShowView(AboutView);
     }
 
     private void ToggleGadgetVisibility()
@@ -1162,14 +1466,16 @@ public partial class MainWindow : Window
         _claudeConnectionStatusText = FindRequiredNamedElement<TextBlock>(claudeConnectionPanel, "ClaudeConnectionStatusText");
         _disconnectClaudeButton = FindRequiredNamedElement<System.Windows.Controls.Button>(claudeConnectionPanel, "DisconnectClaudeButton");
 
-        if (SettingsView.Parent is not Panel parent)
+        if (SettingsView.Parent is not Panel parent || AboutView.Parent != parent)
         {
-            throw new InvalidOperationException("The settings view must be hosted by a panel.");
+            throw new InvalidOperationException("The settings and About views must share a panel.");
         }
 
         parent.Children.Remove(SettingsView);
+        parent.Children.Remove(AboutView);
         SettingsView.Visibility = Visibility.Visible;
-        _settingsWindow = new SettingsWindow(SettingsView);
+        AboutView.Visibility = Visibility.Visible;
+        _settingsWindow = new SettingsWindow(SettingsView, AboutView);
     }
 
     private static T FindRequiredNamedElement<T>(DependencyObject root, string name) where T : FrameworkElement
@@ -1225,10 +1531,11 @@ public partial class MainWindow : Window
         }
 
         double scale = DashboardScaleTransform.ScaleX;
-        double textDrivenContentWidth = GetMinimumContentWidthForVisibleResets();
+        double textDrivenContentWidth = GetMinimumContentWidth();
         double minimumWidth = Math.Ceiling(Math.Max(
             MinimumEmptyGadgetWidth * scale,
             textDrivenContentWidth * scale + GadgetHorizontalChrome));
+        bool shouldExpandWidth = ActualWidth < minimumWidth;
         double effectiveWidth = Math.Max(ActualWidth, minimumWidth);
         double availableWidth = Math.Max(1, (effectiveWidth - GadgetHorizontalChrome) / scale);
         FrameworkElement measuredContent = DashboardContentPanel;
@@ -1243,6 +1550,10 @@ public partial class MainWindow : Window
         {
             MaxHeight = double.PositiveInfinity;
             MinWidth = minimumWidth;
+            if (shouldExpandWidth)
+            {
+                Width = minimumWidth;
+            }
             MinHeight = minimumHeight;
             MaxHeight = minimumHeight;
             Height = minimumHeight;
@@ -1253,27 +1564,69 @@ public partial class MainWindow : Window
         }
     }
 
-    private double GetMinimumContentWidthForVisibleResets()
+    private double GetMinimumContentWidth()
     {
-        double minimumContentWidth = 0;
+        double tokensColumnWidth = Math.Max(
+            MeasureTextWidth(TokensTodayLabelText),
+            MeasureTextWidth(TotalTokensText));
+        double costColumnWidth = Math.Max(
+            MeasureTextWidth(EstimatedCostLabelText),
+            MeasureTextWidth(EstimatedCostText));
+        double minimumContentWidth = tokensColumnWidth
+            + TokenSummaryColumnGap
+            + costColumnWidth
+            + TokenSummaryHorizontalPadding;
+
         if (IsProviderVisible("codex"))
         {
-            minimumContentWidth = Math.Max(minimumContentWidth, MeasureTextWidth(CodexSessionResetText));
-            minimumContentWidth = Math.Max(minimumContentWidth, MeasureTextWidth(CodexWeeklyResetText));
+            minimumContentWidth = Math.Max(
+                minimumContentWidth,
+                MeasureTextWidth(CodexSessionResetText) + ProviderSectionHorizontalPadding);
+            minimumContentWidth = Math.Max(
+                minimumContentWidth,
+                MeasureTextWidth(CodexWeeklyResetText) + ProviderSectionHorizontalPadding);
             minimumContentWidth = Math.Max(
                 minimumContentWidth,
                 MeasureTextWidth(CodexResetCreditsText)
                     + MeasureTextWidth(CodexResetExpiryText)
-                    + 28);
+                    + 28
+                    + ProviderSectionHorizontalPadding);
         }
 
         if (IsProviderVisible("claude"))
         {
-            minimumContentWidth = Math.Max(minimumContentWidth, MeasureTextWidth(ClaudeSessionResetText));
-            minimumContentWidth = Math.Max(minimumContentWidth, MeasureTextWidth(ClaudeWeeklyResetText));
+            minimumContentWidth = Math.Max(
+                minimumContentWidth,
+                MeasureTextWidth(ClaudeSessionResetText) + ProviderSectionHorizontalPadding);
+            minimumContentWidth = Math.Max(
+                minimumContentWidth,
+                MeasureTextWidth(ClaudeWeeklyResetText) + ProviderSectionHorizontalPadding);
         }
 
-        return minimumContentWidth + ProviderSectionHorizontalPadding + TextEdgeSafety;
+        if (IsProviderVisible("kiro"))
+        {
+            minimumContentWidth = Math.Max(
+                minimumContentWidth,
+                MeasureTextWidth(KiroPrimaryResetText) + ProviderSectionHorizontalPadding);
+            if (KiroBonusPanel.IsVisible)
+            {
+                minimumContentWidth = Math.Max(
+                    minimumContentWidth,
+                    MeasureTextWidth(KiroBonusResetText) + ProviderSectionHorizontalPadding);
+            }
+        }
+
+        if (IsProviderVisible("antigravity"))
+        {
+            minimumContentWidth = Math.Max(
+                minimumContentWidth,
+                MeasureTextWidth(AntigravitySessionResetText) + ProviderSectionHorizontalPadding);
+            minimumContentWidth = Math.Max(
+                minimumContentWidth,
+                MeasureTextWidth(AntigravityWeeklyResetText) + ProviderSectionHorizontalPadding);
+        }
+
+        return minimumContentWidth + TextEdgeSafety;
     }
 
     private bool IsProviderVisible(string providerId)
