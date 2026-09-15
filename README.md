@@ -19,13 +19,13 @@ A lightweight Windows desktop gadget that brings AI service usage limits into a 
 - Codex reserve usage and reset-credit information.
 - Automatic Codex refresh using the local signed-in session.
 - Automatic Claude refresh through a protected Claude Web session.
-- Automatic Kiro refresh through the signed-in local CLI.
+- Automatic Kiro refresh through the signed-in Kiro IDE or local CLI, with an optional source selector in Settings.
 - Automatic Antigravity refresh through the loopback service exposed by the running IDE.
 - Fixed provider-aware refresh intervals: five minutes for Codex and Kiro, and one minute for Claude and Antigravity.
 - Configurable provider visibility and ordering with provider icons and a floating drag preview.
 - Compact, scroll-free gadget layout that keeps all selected services visible.
 - About tab inside Settings with project, author, license, and version information.
-- Automatic update availability checks through the latest stable GitHub Release.
+- Automatic update checks with a save-location chooser for the latest stable Windows ZIP from GitHub Releases.
 
 Preferences are stored in `%APPDATA%\AIUsageMonitor\settings.json`.
 The optional Windows startup entry is stored for the current user under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
@@ -61,7 +61,7 @@ The independent settings window leaves the gadget running while services are sho
 - Windows 10 or later.
 - [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) or later.
 - A signed-in Codex session and/or a Claude Web session for their live usage data.
-- Kiro CLI installed and signed in for Kiro limits; local Kiro session files are used for its token total.
+- Kiro IDE and/or Kiro CLI installed and signed in. The source can be selected explicitly in Settings or detected automatically.
 - Antigravity IDE installed, open, and signed in for Antigravity limits and token totals.
 
 ## Run locally
@@ -79,7 +79,7 @@ dotnet run
 - Paste only the `sessionKey` value from the `claude.ai` browser cookies in Settings. The app validates it before saving it in Windows Credential Manager.
 - Credentials remain in memory only while requests are made and are never written to the regular settings file.
 - For the token total, the app scans local Codex and Claude JSONL histories and extracts only timestamps, model names, message identifiers, and token-usage counters. Prompt and response text is not stored or displayed by AI Usage Monitor.
-- Kiro session files are read locally. Antigravity data is requested only from the IDE service bound to the local computer; its temporary connection token is kept in memory and is never displayed or persisted by AI Usage Monitor.
+- Kiro IDE usage is read from its local read-only cache and runtime logs; Kiro CLI limits use its local `/usage` command. Kiro session files are read locally for token estimates. Antigravity data is requested only from the IDE service bound to the local computer; its temporary connection token is kept in memory and is never displayed or persisted by AI Usage Monitor.
 - Token costs are estimates derived from model pricing and may exclude unknown models; they are not provider invoices or subscription charges.
 - Usage data is requested from the Codex/ChatGPT endpoint and the browser-facing Claude Web endpoint. These integrations may stop working if their endpoints change.
 - The app checks the public GitHub Releases API for newer stable versions. No GitHub credentials are used.
@@ -105,7 +105,7 @@ Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md), open 
 
 ## Roadmap
 
-- Define the packaging, download, signature verification, and rollback strategy before enabling automatic updates.
+- Add signature verification, in-app installation, and rollback before enabling automatic file replacement.
 - Add automated parsing tests for the Claude Web usage responses.
 - Add a live Gemini integration with an unavailable-state fallback.
 - Extract provider cards into reusable components.

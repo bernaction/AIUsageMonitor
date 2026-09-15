@@ -7,8 +7,17 @@ using AIUsageMonitor.Models;
 
 namespace AIUsageMonitor.Services;
 
+public enum KiroUsageSource
+{
+    Automatic,
+    Cli,
+    Ide
+}
+
 public sealed class KiroUsageProvider : IAiUsageProvider
 {
+    private const string IdeStateKey = "kiro.kiroAgent";
+    private const int MaximumLogBytes = 2 * 1024 * 1024;
     private static readonly Regex AnsiCsiPattern = new("\\x1B\\[[0-9;?]*[ -/]*[@-~]", RegexOptions.Compiled);
     private static readonly Regex AnsiOscPattern = new("\\x1B\\].*?(?:\\x07|\\x1B\\\\)", RegexOptions.Compiled);
     private static readonly Regex PercentPattern = new("█+\\s*(\\d+(?:\\.\\d+)?)%", RegexOptions.Compiled);
@@ -28,12 +37,55 @@ public sealed class KiroUsageProvider : IAiUsageProvider
 
     public async Task<AiUsageSnapshot> GetUsageAsync(CancellationToken cancellationToken = default)
     {
+        return await GetUsageAsync(KiroUsageSource.Automatic, cancellationToken);
+    }
+
+    public async Task<AiUsageSnapshot> GetUsageAsync(
+        KiroUsageSource source,
+        CancellationToken cancellationToken = default)
+    {
+        AiUsageSnapshot? cliSnapshot = null;
+        if (source is KiroUsageSource.Automatic or KiroUsageSource.Cli)
+        {
+            cliSnapshot = await TryGetCliUsageAsync(cancellationToken);
+            if (cliSnapshot.IsAvailable || source == KiroUsageSource.Cli)
+            {
+                return cliSnapshot;
+            }
+        }
+
+        if (source is KiroUsageSource.Automatic or KiroUsageSource.Ide)
+        {
+            AiUsageSnapshot? ideSnapshot = await Task.Run(
+                () => TryGetIdeUsage(cancellationToken),
+                cancellationToken);
+            if (ideSnapshot is not null)
+            {
+                return ideSnapshot;
+            }
+            if (source == KiroUsageSource.Ide)
+            {
+                return AiUsageSnapshot.Unavailable(
+                    ProviderId,
+                    "Open Kiro IDE and sign in to display credit limits.",
+                    ProviderIssueKind.NotDetected);
+            }
+        }
+
+        return cliSnapshot ?? AiUsageSnapshot.Unavailable(
+            ProviderId,
+            "Install and sign in to Kiro IDE or Kiro CLI to display credit limits.",
+            ProviderIssueKind.NotDetected);
+    }
+
+    private static async Task<AiUsageSnapshot> TryGetCliUsageAsync(CancellationToken cancellationToken)
+    {
         string? command = FindKiroCli();
         if (command is null)
         {
             return AiUsageSnapshot.Unavailable(
-                ProviderId,
-                "Install Kiro CLI to display credit limits.",
+                "kiro",
+                "Install Kiro CLI or select Kiro IDE as the source.",
                 ProviderIssueKind.NotDetected);
         }
 
@@ -52,18 +104,24 @@ public sealed class KiroUsageProvider : IAiUsageProvider
         }
         catch (TimeoutException)
         {
-            return AiUsageSnapshot.Unavailable(ProviderId, "Kiro CLI timed out.");
+            return AiUsageSnapshot.Unavailable("kiro", "Kiro CLI timed out.");
         }
         catch (System.ComponentModel.Win32Exception)
         {
             return AiUsageSnapshot.Unavailable(
-                ProviderId,
+                "kiro",
                 "Kiro CLI could not be started.",
                 ProviderIssueKind.NotDetected);
         }
         catch (InvalidOperationException exception)
         {
-            return AiUsageSnapshot.Unavailable(ProviderId, exception.Message);
+            return AiUsageSnapshot.Unavailable("kiro", exception.Message);
+        }
+        catch (Exception exception) when (exception is IOException
+            or UnauthorizedAccessException
+            or System.Security.SecurityException)
+        {
+            return AiUsageSnapshot.Unavailable("kiro", "Kiro CLI could not be accessed.");
         }
     }
 
@@ -74,28 +132,362 @@ public sealed class KiroUsageProvider : IAiUsageProvider
     internal static IReadOnlyList<LocalTokenEntry> CollectTodayTokenEntries(
         string userProfile,
         DateTimeOffset periodStart,
+        KiroUsageSource source,
         CancellationToken cancellationToken)
     {
-        string sessionsRoot = Path.Combine(userProfile, ".kiro", "sessions");
-        if (!Directory.Exists(sessionsRoot))
-        {
-            return [];
-        }
-
         List<LocalTokenEntry> entries = [];
-        foreach (string path in EnumerateJsonFiles(sessionsRoot))
+        string configuredHome = Environment.GetEnvironmentVariable("KIRO_HOME") ?? string.Empty;
+        string kiroHome = string.IsNullOrWhiteSpace(configuredHome)
+            ? Path.Combine(userProfile, ".kiro")
+            : configuredHome;
+        string sessionsRoot = Path.Combine(kiroHome, "sessions");
+        if (Directory.Exists(sessionsRoot))
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (string.Equals(Path.GetFileName(path), "session.json", StringComparison.OrdinalIgnoreCase))
+            foreach (string path in EnumerateRecentJsonFiles(sessionsRoot, periodStart.UtcDateTime, source))
             {
-                CollectIdeSession(path, periodStart, entries);
-            }
-            else
-            {
-                CollectCliSession(path, periodStart, entries);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (string.Equals(Path.GetFileName(path), "session.json", StringComparison.OrdinalIgnoreCase))
+                {
+                    CollectIdeSession(path, periodStart, entries);
+                }
+                else
+                {
+                    CollectCliSession(path, periodStart, entries);
+                }
             }
         }
         return entries;
+    }
+
+    internal static AiUsageSnapshot? ParseIdeUsageState(
+        string rawState,
+        string? planLabel,
+        DateTimeOffset now)
+    {
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(rawState);
+            JsonElement root = document.RootElement;
+            if (root.ValueKind == JsonValueKind.Object
+                && root.TryGetProperty("kiro.resourceNotifications.usageState", out JsonElement usageState))
+            {
+                root = usageState;
+            }
+            return ParseIdeUsageRoot(root, planLabel, now, "usageBreakdowns");
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    internal static AiUsageSnapshot? ParseIdeUsageResponse(string rawResponse, DateTimeOffset now)
+    {
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(rawResponse);
+            JsonElement root = document.RootElement;
+            string plan = GetString(GetObject(root, "subscriptionInfo"), "subscriptionTitle");
+            return ParseIdeUsageRoot(root, plan, now, "usageBreakdownList");
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static AiUsageSnapshot? TryGetIdeUsage(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        string ideRoot = Path.Combine(appData, "Kiro");
+        string globalStorage = Path.Combine(ideRoot, "User", "globalStorage");
+        string statePath = Path.Combine(globalStorage, "state.vscdb");
+
+        IdeLogSnapshot? logged = TryReadLatestIdeLog(Path.Combine(ideRoot, "logs"), cancellationToken);
+        string? cachedJson = WindowsSqliteReader.ReadItemValue(statePath, IdeStateKey);
+        AiUsageSnapshot? cached = string.IsNullOrWhiteSpace(cachedJson)
+            ? null
+            : ParseIdeUsageState(cachedJson, logged?.PlanLabel, DateTimeOffset.Now);
+        if (cached is not null)
+        {
+            return cached;
+        }
+        if (logged is not null)
+        {
+            return ParseIdeUsageResponse(logged.ResponseJson, DateTimeOffset.Now);
+        }
+        if (Directory.Exists(ideRoot))
+        {
+            return AiUsageSnapshot.Unavailable(
+                "kiro",
+                "Open Kiro IDE and its usage view once, then try again.",
+                ProviderIssueKind.AuthenticationRequired);
+        }
+        return null;
+    }
+
+    private static AiUsageSnapshot? ParseIdeUsageRoot(
+        JsonElement root,
+        string? planLabel,
+        DateTimeOffset now,
+        string breakdownsProperty)
+    {
+        if (root.ValueKind != JsonValueKind.Object
+            || !root.TryGetProperty(breakdownsProperty, out JsonElement breakdowns)
+            || breakdowns.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        JsonElement primary = default;
+        foreach (JsonElement candidate in breakdowns.EnumerateArray())
+        {
+            if (candidate.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+            primary = candidate;
+            string type = FirstNonEmpty(GetString(candidate, "resourceType"), GetString(candidate, "type"));
+            if (type.Equals("CREDIT", StringComparison.OrdinalIgnoreCase))
+            {
+                break;
+            }
+        }
+        if (primary.ValueKind != JsonValueKind.Object
+            || !TryCreateIdeWindow(primary, "Credits", out UsageWindow? parsedCredits))
+        {
+            return null;
+        }
+
+        UsageWindow credits = parsedCredits!;
+        DateTimeOffset? reset = ParseIdeTimestamp(primary, "nextDateReset")
+            ?? ParseIdeTimestamp(primary, "resetDate")
+            ?? ParseIdeTimestamp(root, "nextDateReset");
+        credits = credits with { ResetsAt = reset };
+
+        UsageWindow? bonus = null;
+        JsonElement freeTrial = FirstObject(primary, "freeTrialInfo", "freeTrialUsage");
+        if (IsActivePool(freeTrial))
+        {
+            _ = TryCreateIdeWindow(freeTrial, "Bonus", out bonus);
+        }
+        if (bonus is null
+            && primary.TryGetProperty("bonuses", out JsonElement bonuses)
+            && bonuses.ValueKind == JsonValueKind.Array)
+        {
+            foreach (JsonElement candidate in bonuses.EnumerateArray())
+            {
+                if (IsActivePool(candidate) && TryCreateIdeWindow(candidate, "Bonus", out bonus))
+                {
+                    break;
+                }
+            }
+        }
+
+        string normalizedPlan = NormalizeIdePlanLabel(planLabel);
+        return new AiUsageSnapshot(
+            "kiro",
+            normalizedPlan,
+            credits,
+            bonus,
+            null,
+            null,
+            now,
+            true,
+            "Usage read from the local Kiro IDE cache.");
+    }
+
+    private static bool TryCreateIdeWindow(JsonElement value, string label, out UsageWindow? window)
+    {
+        window = null;
+        double? used = FirstNumber(value, "currentUsageWithPrecision", "currentUsage");
+        double? limit = FirstNumber(value, "usageLimitWithPrecision", "usageLimit");
+        if (used is null || limit is null || limit <= 0)
+        {
+            return false;
+        }
+
+        DateTimeOffset? expiry = ParseIdeTimestamp(value, "freeTrialExpiry")
+            ?? ParseIdeTimestamp(value, "expiresAt")
+            ?? ParseIdeTimestamp(value, "expiryDate");
+        window = new UsageWindow(label, Math.Clamp(used.Value / limit.Value * 100, 0, 100), null, expiry);
+        return true;
+    }
+
+    private static bool IsActivePool(JsonElement value)
+    {
+        if (value.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+        string status = FirstNonEmpty(GetString(value, "freeTrialStatus"), GetString(value, "status"));
+        return string.IsNullOrWhiteSpace(status)
+            || status.Equals("ACTIVE", StringComparison.OrdinalIgnoreCase)
+            || status.Equals("EXHAUSTED", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static IdeLogSnapshot? TryReadLatestIdeLog(string logsRoot, CancellationToken cancellationToken)
+    {
+        if (!Directory.Exists(logsRoot))
+        {
+            return null;
+        }
+
+        IEnumerable<string> logPaths = EnumerateDirectories(logsRoot)
+            .OrderByDescending(Path.GetFileName, StringComparer.OrdinalIgnoreCase)
+            .Take(12)
+            .SelectMany(sessionDirectory => EnumerateDirectories(sessionDirectory))
+            .Where(path => Path.GetFileName(path).StartsWith("window", StringComparison.OrdinalIgnoreCase))
+            .Select(windowDirectory => Path.Combine(
+                windowDirectory,
+                "exthost",
+                "kiro.kiroAgent",
+                "q-client.log"))
+            .Where(File.Exists)
+            .OrderByDescending(TryGetLastWriteTimeUtc)
+            .Take(24);
+        foreach (string logPath in logPaths)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            string? tail = TryReadFileTail(logPath, MaximumLogBytes);
+            if (string.IsNullOrWhiteSpace(tail))
+            {
+                continue;
+            }
+
+            string[] lines = tail.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
+            for (int index = lines.Length - 1; index >= 0; index--)
+            {
+                string line = lines[index];
+                if (!line.Contains("GetUsageLimitsCommand", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+                int jsonStart = line.IndexOf('{');
+                if (jsonStart < 0)
+                {
+                    continue;
+                }
+                try
+                {
+                    using JsonDocument document = JsonDocument.Parse(line[jsonStart..]);
+                    JsonElement root = document.RootElement;
+                    if (!GetString(root, "commandName").Equals("GetUsageLimitsCommand", StringComparison.Ordinal)
+                        || !root.TryGetProperty("output", out JsonElement output)
+                        || output.ValueKind != JsonValueKind.Object)
+                    {
+                        continue;
+                    }
+                    string plan = GetString(GetObject(output, "subscriptionInfo"), "subscriptionTitle");
+                    return new IdeLogSnapshot(output.GetRawText(), plan);
+                }
+                catch (JsonException)
+                {
+                }
+            }
+        }
+        return null;
+    }
+
+    private static IEnumerable<string> EnumerateDirectories(string root)
+    {
+        try
+        {
+            return Directory.EnumerateDirectories(root).ToArray();
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return [];
+        }
+    }
+
+    private static string? TryReadFileTail(string path, int maximumBytes)
+    {
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+        try
+        {
+            using FileStream stream = new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            if (stream.Length > maximumBytes)
+            {
+                stream.Seek(-maximumBytes, SeekOrigin.End);
+            }
+            using StreamReader reader = new(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+            if (stream.Position > 0)
+            {
+                _ = reader.ReadLine();
+            }
+            return reader.ReadToEnd();
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    private static JsonElement FirstObject(JsonElement element, params string[] names)
+    {
+        foreach (string name in names)
+        {
+            JsonElement value = GetObject(element, name);
+            if (value.ValueKind == JsonValueKind.Object)
+            {
+                return value;
+            }
+        }
+        return default;
+    }
+
+    private static double? FirstNumber(JsonElement element, params string[] names)
+    {
+        foreach (string name in names)
+        {
+            if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty(name, out JsonElement value))
+            {
+                continue;
+            }
+            if (value.ValueKind == JsonValueKind.Number
+                && value.TryGetDouble(out double number)
+                && double.IsFinite(number))
+            {
+                return number;
+            }
+            if (value.ValueKind == JsonValueKind.String
+                && double.TryParse(value.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out number)
+                && double.IsFinite(number))
+            {
+                return number;
+            }
+        }
+        return null;
+    }
+
+    private static DateTimeOffset? ParseIdeTimestamp(JsonElement element, string name)
+    {
+        if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty(name, out JsonElement value))
+        {
+            return null;
+        }
+        return value.ValueKind == JsonValueKind.String
+            && DateTimeOffset.TryParse(value.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out DateTimeOffset parsed)
+                ? parsed
+                : null;
+    }
+
+    private static string NormalizeIdePlanLabel(string? value)
+    {
+        string plan = Regex.Replace(value?.Trim() ?? string.Empty, "^Kiro\\s+", string.Empty, RegexOptions.IgnoreCase);
+        return string.IsNullOrWhiteSpace(plan)
+            ? "Kiro IDE"
+            : CultureInfo.GetCultureInfo("en-US").TextInfo.ToTitleCase(plan.ToLowerInvariant());
+    }
+
+    private static string FirstNonEmpty(params string[] values)
+    {
+        return values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? string.Empty;
     }
 
     internal static AiUsageSnapshot ParseUsage(string rawOutput, DateTimeOffset now)
@@ -275,7 +667,10 @@ public sealed class KiroUsageProvider : IAiUsageProvider
         return double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out double result) ? result : 0;
     }
 
-    private static IEnumerable<string> EnumerateJsonFiles(string root)
+    private static IEnumerable<string> EnumerateRecentJsonFiles(
+        string root,
+        DateTime periodStartUtc,
+        KiroUsageSource source)
     {
         Stack<string> directories = new();
         directories.Push(root);
@@ -297,6 +692,14 @@ public sealed class KiroUsageProvider : IAiUsageProvider
             }
             foreach (string child in children)
             {
+                string relative = Path.GetRelativePath(root, child);
+                bool isCliDirectory = relative.Equals("cli", StringComparison.OrdinalIgnoreCase)
+                    || relative.StartsWith($"cli{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase);
+                if ((source == KiroUsageSource.Cli && !isCliDirectory)
+                    || (source == KiroUsageSource.Ide && isCliDirectory))
+                {
+                    continue;
+                }
                 directories.Push(child);
             }
             IEnumerable<string> files;
@@ -314,8 +717,39 @@ public sealed class KiroUsageProvider : IAiUsageProvider
             }
             foreach (string file in files)
             {
-                yield return file;
+                string relative = Path.GetRelativePath(root, file);
+                bool isCliFile = relative.StartsWith($"cli{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase);
+                if ((source == KiroUsageSource.Cli && !isCliFile)
+                    || (source == KiroUsageSource.Ide && isCliFile))
+                {
+                    continue;
+                }
+
+                string companionPath = string.Equals(Path.GetFileName(file), "session.json", StringComparison.OrdinalIgnoreCase)
+                    ? Path.Combine(Path.GetDirectoryName(file) ?? string.Empty, "messages.jsonl")
+                    : Path.ChangeExtension(file, ".jsonl");
+                DateTime newestWrite = TryGetLastWriteTimeUtc(file);
+                if (File.Exists(companionPath))
+                {
+                    newestWrite = new DateTime(Math.Max(newestWrite.Ticks, TryGetLastWriteTimeUtc(companionPath).Ticks), DateTimeKind.Utc);
+                }
+                if (newestWrite >= periodStartUtc)
+                {
+                    yield return file;
+                }
             }
+        }
+    }
+
+    private static DateTime TryGetLastWriteTimeUtc(string path)
+    {
+        try
+        {
+            return File.GetLastWriteTimeUtc(path);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return DateTime.MinValue;
         }
     }
 
@@ -616,4 +1050,6 @@ public sealed class KiroUsageProvider : IAiUsageProvider
         int PromptCharacters,
         int AssistantCharacters,
         DateTimeOffset? Timestamp);
+
+    private sealed record IdeLogSnapshot(string ResponseJson, string PlanLabel);
 }

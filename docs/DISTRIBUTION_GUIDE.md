@@ -50,6 +50,7 @@ Basta executar na raiz do projeto:
 ./build-release.ps1
 ```
 O script lê automaticamente a tag `<Version>` do `AIUsageMonitor.csproj` (ex: `0.1.2`), gerando a pasta `./dist/AIUsageMonitor` e o arquivo compactado versionado `./dist/AIUsageMonitor-v0.1.2-win-x64.zip`.
+O `.zip` contém a pasta raiz `AIUsageMonitor`; assim, ao extrair uma nova versão sobre a instalação anterior, o usuário atualiza os arquivos dentro da mesma pasta do aplicativo.
 
 ---
 
@@ -81,5 +82,5 @@ O arquivo [`.github/workflows/release.yml`](../.github/workflows/release.yml) es
    - Baixa o repositório.
    - Instala o .NET 8.
    - Compila o pacote *Self-Contained Multi-File*.
-   - Compacta em `AIUsageMonitor-v0.1.3-win-x64.zip`.
+   - Compacta a pasta raiz `AIUsageMonitor` em `AIUsageMonitor-v0.1.3-win-x64.zip`.
    - Cria o **GitHub Release** correspondente à tag e anexa o `.zip` como asset de download.

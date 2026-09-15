@@ -61,7 +61,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "Compressing package into $zipPath..." -ForegroundColor Yellow
-Compress-Archive -Path "$OutputDir/*" -DestinationPath $zipPath -Force
+Compress-Archive -Path $OutputDir -DestinationPath $zipPath -Force
 
 $zipItem = Get-Item $zipPath
 $zipSizeMb = [math]::Round($zipItem.Length / 1MB, 2)

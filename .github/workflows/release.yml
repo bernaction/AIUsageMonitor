@@ -37,7 +37,7 @@ jobs:
             $tag = "latest"
           }
           $zipName = "AIUsageMonitor-$tag-win-x64.zip"
-          Compress-Archive -Path ./publish/AIUsageMonitor/* -DestinationPath "./publish/$zipName" -Force
+          Compress-Archive -Path ./publish/AIUsageMonitor -DestinationPath "./publish/$zipName" -Force
           Write-Host "Created archive: ./publish/$zipName"
 
       - name: Create GitHub Release and Upload Asset

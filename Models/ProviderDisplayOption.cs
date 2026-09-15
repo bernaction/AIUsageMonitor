@@ -6,6 +6,7 @@ namespace AIUsageMonitor.Models;
 public sealed class ProviderDisplayOption : INotifyPropertyChanged
 {
     private bool _isVisible;
+    private string _sourcePreference = "automatic";
 
     public ProviderDisplayOption(string providerId, string displayName, string description, bool isVisible = true)
     {
@@ -32,6 +33,21 @@ public sealed class ProviderDisplayOption : INotifyPropertyChanged
             }
 
             _isVisible = value;
+            OnPropertyChanged();
+        }
+    }
+
+    public string SourcePreference
+    {
+        get => _sourcePreference;
+        set
+        {
+            if (string.Equals(_sourcePreference, value, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            _sourcePreference = value;
             OnPropertyChanged();
         }
     }

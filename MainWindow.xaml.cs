@@ -19,6 +19,7 @@ using Drawing = System.Drawing;
 using Forms = System.Windows.Forms;
 using ButtonBase = System.Windows.Controls.Primitives.ButtonBase;
 using CheckBox = System.Windows.Controls.CheckBox;
+using ComboBox = System.Windows.Controls.ComboBox;
 using Color = System.Windows.Media.Color;
 using DragEventArgs = System.Windows.DragEventArgs;
 using DragDropEffects = System.Windows.DragDropEffects;
@@ -58,7 +59,7 @@ public partial class MainWindow : Window
     private static readonly TimeSpan TokenRollDuration = TimeSpan.FromMilliseconds(520);
 
     private readonly IAiUsageProvider _codexUsageProvider = new CodexUsageProvider();
-    private readonly IAiUsageProvider _kiroUsageProvider = new KiroUsageProvider();
+    private readonly KiroUsageProvider _kiroUsageProvider = new();
     private readonly AntigravityUsageProvider _antigravityUsageProvider = new();
     private readonly LocalTokenUsageService _localTokenUsageService;
     private readonly ClaudeSessionKeyStore _claudeSessionKeyStore = new();
@@ -95,12 +96,15 @@ public partial class MainWindow : Window
     private ProviderDragAdorner? _providerDragAdorner;
     private AdornerLayer? _providerDragAdornerLayer;
     private Uri? _latestReleaseUrl;
+    private Uri? _latestReleaseDownloadUrl;
+    private string? _latestReleaseAssetName;
     private bool _isRefreshingCodex;
     private bool _isRefreshingClaude;
     private bool _isRefreshingKiro;
     private bool _isRefreshingAntigravity;
     private bool _isRefreshingTokenUsage;
     private bool _isCheckingForUpdates;
+    private bool _isDownloadingUpdate;
     private bool _settingsLoaded;
     private bool _isUpdatingWindowsStartupOption;
     private bool _minimumSizeUpdatePending;
@@ -145,7 +149,7 @@ public partial class MainWindow : Window
         };
         _providerOptions.Add(new ProviderDisplayOption("codex", "Codex", "Live limits from the local session"));
         _providerOptions.Add(new ProviderDisplayOption("claude", "Claude", "Live limits from the protected Claude Web session"));
-        _providerOptions.Add(new ProviderDisplayOption("kiro", "Kiro", "Local limits from the Kiro CLI", isVisible: false));
+        _providerOptions.Add(new ProviderDisplayOption("kiro", "Kiro", "Local usage from Kiro IDE or CLI", isVisible: false));
         _providerOptions.Add(new ProviderDisplayOption("antigravity", "Antigravity", "Local limits from the running Antigravity IDE", isVisible: false));
         _providerOptions.Add(new ProviderDisplayOption("gemini", "Gemini", "Not connected yet"));
         _providerCards.Add("codex", CodexCard);
@@ -166,21 +170,57 @@ public partial class MainWindow : Window
         SizeChanged += MainWindow_SizeChanged;
     }
 
-    private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
+    private void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
-        await LoadSettingsAsync();
-        _codexRefreshTimer.Start();
-        _claudeRefreshTimer.Start();
-        _kiroRefreshTimer.Start();
-        _antigravityRefreshTimer.Start();
-        _tokenUsageRefreshTimer.Start();
-        await Task.WhenAll(
-            RefreshCodexUsageAsync(),
-            RefreshClaudeUsageAsync(),
-            RefreshKiroUsageAsync(),
-            RefreshAntigravityUsageAsync(),
-            RefreshTokenUsageAsync(),
-            CheckForUpdatesAsync());
+        Loaded -= MainWindow_Loaded;
+        Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() => _ = InitializeAsync()));
+    }
+
+    private async Task InitializeAsync()
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(250), _lifetimeCancellation.Token);
+            await LoadSettingsAsync();
+        }
+        catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
+        {
+            return;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            _settingsLoaded = true;
+            ApplyProviderLayout();
+            SettingsHintText.Text = "Settings could not be loaded; defaults are active";
+        }
+
+        try
+        {
+            _codexRefreshTimer.Start();
+            _claudeRefreshTimer.Start();
+            _kiroRefreshTimer.Start();
+            _antigravityRefreshTimer.Start();
+            _tokenUsageRefreshTimer.Start();
+
+            Task[] independentRefreshes =
+            [
+                RefreshCodexUsageAsync(),
+                RefreshClaudeUsageAsync(),
+                RefreshKiroUsageAsync(),
+                CheckForUpdatesAsync()
+            ];
+
+            await RefreshAntigravityUsageAsync();
+            await RefreshTokenUsageAsync();
+            await Task.WhenAll(independentRefreshes);
+        }
+        catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            SettingsHintText.Text = "One or more services could not be refreshed";
+        }
     }
 
     private async Task LoadSettingsAsync()
@@ -192,7 +232,7 @@ public partial class MainWindow : Window
                 item => item.ProviderId,
                 StringComparer.OrdinalIgnoreCase);
             List<ProviderDisplayOption> ordered = [];
-            foreach (ProviderPreference preference in settings.Providers)
+            foreach (ProviderPreference preference in settings.Providers ?? [])
             {
                 if (!known.Remove(preference.ProviderId, out ProviderDisplayOption? option))
                 {
@@ -200,6 +240,10 @@ public partial class MainWindow : Window
                 }
 
                 option.IsVisible = preference.IsVisible;
+                if (option.ProviderId.Equals("kiro", StringComparison.OrdinalIgnoreCase))
+                {
+                    option.SourcePreference = NormalizeKiroSourcePreference(preference.Source);
+                }
                 ordered.Add(option);
             }
             ordered.AddRange(_providerOptions.Where(known.ContainsValue));
@@ -308,6 +352,10 @@ public partial class MainWindow : Window
         {
             // The window is closing; no UI update is needed.
         }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            ApplyUnavailableCodexState("Codex usage is temporarily unavailable.");
+        }
         finally
         {
             _isRefreshingCodex = false;
@@ -331,6 +379,12 @@ public partial class MainWindow : Window
         {
             // The window is closing; no UI update is needed.
         }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            ApplyClaudeSnapshot(AiUsageSnapshot.Unavailable(
+                "claude",
+                "Claude usage is temporarily unavailable."));
+        }
         finally
         {
             _isRefreshingClaude = false;
@@ -353,6 +407,7 @@ public partial class MainWindow : Window
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
             TokenUsageSnapshot snapshot = await _localTokenUsageService.GetTodayUsageAsync(
                 selectedProviderIds,
+                GetKiroUsageSource(),
                 _lifetimeCancellation.Token);
             ApplyTokenUsageSnapshot(snapshot);
         }
@@ -360,7 +415,7 @@ public partial class MainWindow : Window
         {
             // The window is closing; no UI update is needed.
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        catch (Exception exception) when (exception is not OutOfMemoryException)
         {
             StopTokenRollAnimation();
             _displayedTokenTotal = null;
@@ -385,10 +440,18 @@ public partial class MainWindow : Window
         _isRefreshingKiro = true;
         try
         {
-            ApplyKiroSnapshot(await _kiroUsageProvider.GetUsageAsync(_lifetimeCancellation.Token));
+            ApplyKiroSnapshot(await _kiroUsageProvider.GetUsageAsync(
+                GetKiroUsageSource(),
+                _lifetimeCancellation.Token));
         }
         catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
         {
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            ApplyKiroSnapshot(AiUsageSnapshot.Unavailable(
+                "kiro",
+                "Kiro usage is temporarily unavailable."));
         }
         finally
         {
@@ -410,6 +473,12 @@ public partial class MainWindow : Window
         }
         catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
         {
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            ApplyAntigravitySnapshot(AiUsageSnapshot.Unavailable(
+                "antigravity",
+                "Antigravity usage is temporarily unavailable."));
         }
         finally
         {
@@ -630,7 +699,12 @@ public partial class MainWindow : Window
     private void ApplyKiroSnapshot(AiUsageSnapshot snapshot)
     {
         ApplyProviderStatus(snapshot, KiroStatusText, KiroPlanText, KiroConnectionHint, KiroConnectionHintText,
-            "Install and sign in to the Kiro CLI to display usage limits.");
+            "Install and sign in to Kiro IDE or Kiro CLI to display usage limits.");
+        if (snapshot.IsAvailable
+            && snapshot.StatusMessage?.Contains("local Kiro IDE cache", StringComparison.Ordinal) == true)
+        {
+            KiroStatusText.Text = "Local";
+        }
         if (snapshot.IsAvailable && snapshot.Session is null)
         {
             KiroStatusText.Text = "Managed";
@@ -890,6 +964,10 @@ public partial class MainWindow : Window
         catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
         {
         }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            ShowClaudeConnectionError("The Claude Web session could not be checked.");
+        }
         finally
         {
             _saveClaudeSessionKeyButton.IsEnabled = true;
@@ -953,15 +1031,78 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void DownloadUpdateButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isDownloadingUpdate
+            || _latestReleaseDownloadUrl is null
+            || string.IsNullOrWhiteSpace(_latestReleaseAssetName))
+        {
+            return;
+        }
+
+        Microsoft.Win32.SaveFileDialog saveDialog = new()
+        {
+            Title = "Save AI Usage Monitor update",
+            FileName = _latestReleaseAssetName,
+            DefaultExt = ".zip",
+            Filter = "ZIP archive (*.zip)|*.zip",
+            AddExtension = true,
+            OverwritePrompt = true
+        };
+        Window dialogOwner = _settingsWindow is not null ? _settingsWindow : this;
+        if (saveDialog.ShowDialog(dialogOwner) != true)
+        {
+            return;
+        }
+
+        _isDownloadingUpdate = true;
+        DownloadUpdateButton.IsEnabled = false;
+        CheckForUpdatesButton.IsEnabled = false;
+        UpdateStatusText.Text = "Downloading update...";
+        UpdateStatusText.Foreground = new SolidColorBrush(Color.FromRgb(150, 160, 181));
+        try
+        {
+            await _updateService.DownloadAsync(
+                _latestReleaseDownloadUrl,
+                saveDialog.FileName,
+                _lifetimeCancellation.Token);
+            UpdateStatusText.Text = $"Update saved to:\n{saveDialog.FileName}\nClose the app and extract the ZIP over your existing AIUsageMonitor folder.";
+            UpdateStatusText.Foreground = new SolidColorBrush(Color.FromRgb(103, 230, 167));
+        }
+        catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception) when (exception is HttpRequestException
+            or IOException
+            or UnauthorizedAccessException
+            or ArgumentException)
+        {
+            UpdateStatusText.Text = "The update could not be downloaded. Your existing files were not changed.";
+            UpdateStatusText.Foreground = new SolidColorBrush(Color.FromRgb(240, 184, 137));
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            UpdateStatusText.Text = "The update could not be downloaded. Your existing files were not changed.";
+            UpdateStatusText.Foreground = new SolidColorBrush(Color.FromRgb(240, 184, 137));
+        }
+        finally
+        {
+            _isDownloadingUpdate = false;
+            DownloadUpdateButton.IsEnabled = _latestReleaseDownloadUrl is not null;
+            CheckForUpdatesButton.IsEnabled = true;
+        }
+    }
+
     private async Task CheckForUpdatesAsync()
     {
-        if (_isCheckingForUpdates)
+        if (_isCheckingForUpdates || _isDownloadingUpdate)
         {
             return;
         }
 
         _isCheckingForUpdates = true;
         CheckForUpdatesButton.IsEnabled = false;
+        DownloadUpdateButton.IsEnabled = false;
         UpdateStatusText.Text = "Checking GitHub Releases...";
         UpdateStatusText.Foreground = new SolidColorBrush(Color.FromRgb(150, 160, 181));
 
@@ -974,6 +1115,9 @@ public partial class MainWindow : Window
             if (!result.Succeeded)
             {
                 _latestReleaseUrl = null;
+                _latestReleaseDownloadUrl = null;
+                _latestReleaseAssetName = null;
+                DownloadUpdateButton.Visibility = Visibility.Collapsed;
                 ViewReleaseButton.Visibility = Visibility.Collapsed;
                 UpdateStatusText.Text = result.ErrorMessage ?? "The update check failed.";
                 UpdateStatusText.Foreground = new SolidColorBrush(Color.FromRgb(240, 184, 137));
@@ -981,14 +1125,25 @@ public partial class MainWindow : Window
             }
 
             _latestReleaseUrl = result.ReleaseUrl;
+            _latestReleaseDownloadUrl = result.DownloadUrl;
+            _latestReleaseAssetName = result.AssetName;
             if (result.IsUpdateAvailable)
             {
                 ViewReleaseButton.Visibility = Visibility.Visible;
-                UpdateStatusText.Text = $"Version {result.LatestTag} is available.";
+                DownloadUpdateButton.Visibility = result.DownloadUrl is not null
+                    && !string.IsNullOrWhiteSpace(result.AssetName)
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
+                UpdateStatusText.Text = result.DownloadUrl is not null
+                    ? $"Version {result.LatestTag} is available. Choose where to save the ZIP."
+                    : $"Version {result.LatestTag} is available, but its Windows ZIP was not found.";
                 UpdateStatusText.Foreground = new SolidColorBrush(Color.FromRgb(103, 230, 167));
             }
             else
             {
+                _latestReleaseDownloadUrl = null;
+                _latestReleaseAssetName = null;
+                DownloadUpdateButton.Visibility = Visibility.Collapsed;
                 ViewReleaseButton.Visibility = Visibility.Collapsed;
                 UpdateStatusText.Text = $"You're up to date. Latest stable release: {result.LatestTag}.";
                 UpdateStatusText.Foreground = new SolidColorBrush(Color.FromRgb(197, 204, 218));
@@ -997,10 +1152,21 @@ public partial class MainWindow : Window
         catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
         {
         }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            _latestReleaseUrl = null;
+            _latestReleaseDownloadUrl = null;
+            _latestReleaseAssetName = null;
+            DownloadUpdateButton.Visibility = Visibility.Collapsed;
+            ViewReleaseButton.Visibility = Visibility.Collapsed;
+            UpdateStatusText.Text = "The update check failed.";
+            UpdateStatusText.Foreground = new SolidColorBrush(Color.FromRgb(240, 184, 137));
+        }
         finally
         {
             _isCheckingForUpdates = false;
             CheckForUpdatesButton.IsEnabled = true;
+            DownloadUpdateButton.IsEnabled = _latestReleaseDownloadUrl is not null;
         }
     }
 
@@ -1049,6 +1215,53 @@ public partial class MainWindow : Window
             }
             await RefreshTokenUsageAsync();
         }
+    }
+
+    private async void KiroSourceSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_settingsLoaded
+            || sender is not ComboBox { DataContext: ProviderDisplayOption option } comboBox
+            || !option.ProviderId.Equals("kiro", StringComparison.OrdinalIgnoreCase)
+            || comboBox.SelectedValue is not string selectedValue)
+        {
+            return;
+        }
+
+        string normalized = NormalizeKiroSourcePreference(selectedValue);
+        if (string.Equals(option.SourcePreference, normalized, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        option.SourcePreference = normalized;
+        await SaveSettingsAsync();
+        if (option.IsVisible)
+        {
+            await RefreshKiroUsageAsync();
+            await RefreshTokenUsageAsync();
+        }
+    }
+
+    private KiroUsageSource GetKiroUsageSource()
+    {
+        string preference = _providerOptions.FirstOrDefault(option =>
+            option.ProviderId.Equals("kiro", StringComparison.OrdinalIgnoreCase))?.SourcePreference ?? "automatic";
+        return NormalizeKiroSourcePreference(preference) switch
+        {
+            "cli" => KiroUsageSource.Cli,
+            "ide" => KiroUsageSource.Ide,
+            _ => KiroUsageSource.Automatic
+        };
+    }
+
+    private static string NormalizeKiroSourcePreference(string? value)
+    {
+        return value?.Trim().ToLowerInvariant() switch
+        {
+            "cli" => "cli",
+            "ide" => "ide",
+            _ => "automatic"
+        };
     }
 
     private void ApplyProviderLayout()
@@ -1236,7 +1449,10 @@ public partial class MainWindow : Window
             Providers = _providerOptions.Select(item => new ProviderPreference
             {
                 ProviderId = item.ProviderId,
-                IsVisible = item.IsVisible
+                IsVisible = item.IsVisible,
+                Source = item.ProviderId.Equals("kiro", StringComparison.OrdinalIgnoreCase)
+                    ? NormalizeKiroSourcePreference(item.SourcePreference)
+                    : null
             }).ToList()
         };
 

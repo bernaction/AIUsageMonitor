@@ -38,6 +38,7 @@ public sealed class LocalTokenUsageService
 
     public async Task<TokenUsageSnapshot> GetTodayUsageAsync(
         IReadOnlySet<string>? selectedProviderIds = null,
+        KiroUsageSource kiroSource = KiroUsageSource.Automatic,
         CancellationToken cancellationToken = default)
     {
         DateTime localToday = DateTime.Today;
@@ -62,7 +63,11 @@ public sealed class LocalTokenUsageService
                     cancellationToken)
                 : new ProviderAccumulator();
             ProviderAccumulator kiro = IsSelected("kiro", selectedProviderIds)
-                ? CollectEntries(KiroUsageProvider.CollectTodayTokenEntries(userProfile, periodStart, cancellationToken))
+                ? CollectEntries(KiroUsageProvider.CollectTodayTokenEntries(
+                    userProfile,
+                    periodStart,
+                    kiroSource,
+                    cancellationToken))
                 : new ProviderAccumulator();
             return (codex, claude, kiro);
         }, cancellationToken);

@@ -195,6 +195,147 @@
       </Setter>
     </Style>
 
+    <Style x:Key="ModernCheckBoxStyle" TargetType="{x:Type CheckBox}">
+      <Setter Property="MinHeight" Value="24" />
+      <Setter Property="Foreground" Value="#E5E9F2" />
+      <Setter Property="FontFamily" Value="{StaticResource AppFont}" />
+      <Setter Property="FontSize" Value="11" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="{x:Type CheckBox}">
+            <Grid Background="Transparent">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+              </Grid.ColumnDefinitions>
+              <Border x:Name="SwitchTrack"
+                      Width="32"
+                      Height="18"
+                      VerticalAlignment="Center"
+                      Background="#252C3B"
+                      BorderBrush="#48FFFFFF"
+                      BorderThickness="1"
+                      CornerRadius="9">
+                <Ellipse x:Name="SwitchThumb"
+                         Width="12"
+                         Height="12"
+                         Margin="2,0,0,0"
+                         HorizontalAlignment="Left"
+                         VerticalAlignment="Center"
+                         Fill="#AEB8CB">
+                  <Ellipse.RenderTransform>
+                    <TranslateTransform X="0" />
+                  </Ellipse.RenderTransform>
+                </Ellipse>
+              </Border>
+              <ContentPresenter Grid.Column="1"
+                                Margin="9,0,0,0"
+                                VerticalAlignment="Center"
+                                RecognizesAccessKey="True" />
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="SwitchTrack" Property="Background" Value="#30394B" />
+                <Setter TargetName="SwitchTrack" Property="BorderBrush" Value="#687C5CFC" />
+              </Trigger>
+              <Trigger Property="IsChecked" Value="True">
+                <Setter TargetName="SwitchTrack" Property="Background" Value="#7C5CFC" />
+                <Setter TargetName="SwitchTrack" Property="BorderBrush" Value="#A994FF" />
+                <Setter TargetName="SwitchThumb" Property="Fill" Value="#FFFFFF" />
+                <Setter TargetName="SwitchThumb" Property="RenderTransform">
+                  <Setter.Value>
+                    <TranslateTransform X="14" />
+                  </Setter.Value>
+                </Setter>
+              </Trigger>
+              <MultiTrigger>
+                <MultiTrigger.Conditions>
+                  <Condition Property="IsChecked" Value="True" />
+                  <Condition Property="IsMouseOver" Value="True" />
+                </MultiTrigger.Conditions>
+                <Setter TargetName="SwitchTrack" Property="Background" Value="#8A70FF" />
+              </MultiTrigger>
+              <Trigger Property="IsKeyboardFocused" Value="True">
+                <Setter TargetName="SwitchTrack" Property="BorderBrush" Value="#D4CBFF" />
+                <Setter TargetName="SwitchTrack" Property="BorderThickness" Value="1.5" />
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Opacity" Value="0.45" />
+                <Setter Property="Cursor" Value="Arrow" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style x:Key="ModernChevronToggleStyle" TargetType="{x:Type ToggleButton}">
+      <Setter Property="Width" Value="26" />
+      <Setter Property="Height" Value="26" />
+      <Setter Property="Margin" Value="8,0,0,0" />
+      <Setter Property="Foreground" Value="#AEB8CB" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderBrush" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="{x:Type ToggleButton}">
+            <Border x:Name="ChevronSurface"
+                    Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}"
+                    CornerRadius="8">
+              <Path x:Name="ChevronPath"
+                    Width="6"
+                    Height="10"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Data="M1,1 L5,5 L1,9"
+                    RenderTransformOrigin="0.5,0.5"
+                    Stretch="Fill"
+                    Stroke="{TemplateBinding Foreground}"
+                    StrokeEndLineCap="Round"
+                    StrokeLineJoin="Round"
+                    StrokeStartLineCap="Round"
+                    StrokeThickness="1.6">
+                <Path.RenderTransform>
+                  <RotateTransform Angle="0" />
+                </Path.RenderTransform>
+              </Path>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="ChevronSurface" Property="Background" Value="#18FFFFFF" />
+                <Setter TargetName="ChevronSurface" Property="BorderBrush" Value="#28FFFFFF" />
+                <Setter Property="Foreground" Value="#E1E5EE" />
+              </Trigger>
+              <Trigger Property="IsChecked" Value="True">
+                <Setter TargetName="ChevronSurface" Property="Background" Value="#247C5CFC" />
+                <Setter TargetName="ChevronSurface" Property="BorderBrush" Value="#557C5CFC" />
+                <Setter TargetName="ChevronPath" Property="RenderTransform">
+                  <Setter.Value>
+                    <RotateTransform Angle="90" />
+                  </Setter.Value>
+                </Setter>
+                <Setter Property="Foreground" Value="#D9D2FF" />
+              </Trigger>
+              <Trigger Property="IsKeyboardFocused" Value="True">
+                <Setter TargetName="ChevronSurface" Property="BorderBrush" Value="#A994FF" />
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Opacity" Value="0.45" />
+                <Setter Property="Cursor" Value="Arrow" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
     <Style x:Key="UsageBarStyle" TargetType="ProgressBar">
       <Setter Property="Height" Value="7" />
       <Setter Property="Background" Value="#22FFFFFF" />
@@ -503,7 +644,7 @@
                           Data="M4.594 6.677C6.67-2.226 18.746-2.211 21.16 6.632c.353 1.297 1.725 7.582-1.673 13.747-1.545 2.797-5.841 5.49-6.99 1.883C8.6 25.477 3.315 24.1 5.789 18.609l-.318.143c-3.57 1.305-3.863-1.208-3.173-2.513.45-.84.727-1.335.937-1.897.353-.975.458-1.568.593-2.498.27-1.837.277-3.607.765-5.167zm8.37.01a.92.92 0 00-.81.428c-.217.323-.33.825-.33 1.462 0 .705.15 1.89 1.14 1.89h.008c.757 0 1.214-.705 1.214-1.89 0-.622-.127-1.125-.367-1.455a1.014 1.014 0 00-.855-.435zm4.08 0a.92.92 0 00-.81.428c-.217.323-.33.825-.33 1.462 0 .705.15 1.89 1.14 1.89h.008c.757 0 1.215-.705 1.215-1.89 0-.622-.128-1.125-.368-1.455a1.014 1.014 0 00-.855-.435z" />
                   </Viewbox>
                 </Border>
-                <TextBlock Grid.Column="1" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" FontFamily="{StaticResource AppFont}"><Run Text="Kiro" FontSize="14" FontWeight="SemiBold" Foreground="#F6F7FA" /><Run Text="  " /><Run x:Name="KiroPlanText" Text="Looking for Kiro CLI..." FontSize="10.5" Foreground="{StaticResource MutedTextBrush}" /></TextBlock>
+                <TextBlock Grid.Column="1" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" FontFamily="{StaticResource AppFont}"><Run Text="Kiro" FontSize="14" FontWeight="SemiBold" Foreground="#F6F7FA" /><Run Text="  " /><Run x:Name="KiroPlanText" Text="Looking for Kiro..." FontSize="10.5" Foreground="{StaticResource MutedTextBrush}" /></TextBlock>
                 <Border Grid.Column="2" Padding="7,3" Background="#142B8B65" CornerRadius="7" VerticalAlignment="Center">
                   <TextBlock x:Name="KiroStatusText" Text="Reading" FontFamily="{StaticResource AppFont}" FontSize="9.5" Foreground="#F0B889" />
                 </Border>
@@ -525,7 +666,7 @@
                 <TextBlock x:Name="KiroBonusResetText" Text="Waiting for an update" Margin="0,5,0,0" FontFamily="{StaticResource AppFont}" FontSize="9.5" Foreground="{StaticResource MutedTextBrush}" />
               </StackPanel>
               <Border x:Name="KiroConnectionHint" Margin="0,11,0,0" Padding="9,7" Background="#12FFFFFF" CornerRadius="9">
-                <TextBlock x:Name="KiroConnectionHintText" Text="Install and sign in to the Kiro CLI to display usage limits." TextWrapping="Wrap" FontFamily="{StaticResource AppFont}" FontSize="10" Foreground="{StaticResource MutedTextBrush}" />
+                <TextBlock x:Name="KiroConnectionHintText" Text="Install and sign in to Kiro IDE or Kiro CLI to display usage limits." TextWrapping="Wrap" FontFamily="{StaticResource AppFont}" FontSize="10" Foreground="{StaticResource MutedTextBrush}" />
               </Border>
             </StackPanel>
           </Border>
@@ -873,21 +1014,31 @@
               <Setter Property="Background" Value="Transparent" />
               <Setter Property="BorderThickness" Value="0" />
               <Setter Property="Focusable" Value="False" />
+              <Setter Property="Template">
+                <Setter.Value>
+                  <ControlTemplate TargetType="{x:Type ListBoxItem}">
+                    <Border Background="Transparent">
+                      <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                        VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+                    </Border>
+                  </ControlTemplate>
+                </Setter.Value>
+              </Setter>
             </Style>
           </ListBox.ItemContainerStyle>
           <ListBox.ItemTemplate>
             <DataTemplate>
               <Border x:Name="ProviderOptionBorder"
-                      Padding="12"
+                      Padding="14"
                       Background="{StaticResource CardBrush}"
                       BorderBrush="{StaticResource CardBorderBrush}"
                       BorderThickness="1"
-                      CornerRadius="12">
+                      CornerRadius="16">
                 <StackPanel>
                 <Grid>
                   <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="23" />
-                    <ColumnDefinition Width="27" />
+                    <ColumnDefinition Width="39" />
                     <ColumnDefinition Width="29" />
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
@@ -903,6 +1054,7 @@
                              PreviewMouseLeftButtonDown="DragHandle_MouseLeftButtonDown"
                              PreviewMouseMove="DragHandle_MouseMove" />
                   <CheckBox Grid.Column="1"
+                            Style="{StaticResource ModernCheckBoxStyle}"
                             IsChecked="{Binding IsVisible, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                             HorizontalAlignment="Left"
                             VerticalAlignment="Center"
@@ -927,29 +1079,50 @@
                   </StackPanel>
                   <ToggleButton x:Name="ClaudeChevronButton"
                                 Grid.Column="4"
-                                Width="24"
-                                Height="24"
-                                Margin="8,0,0,0"
-                                Padding="0"
-                                Content="›"
+                                Style="{StaticResource ModernChevronToggleStyle}"
                                 Visibility="Collapsed"
                                 VerticalAlignment="Center"
-                                Foreground="#AEB8CB"
-                                Background="Transparent"
-                                BorderThickness="0"
-                                Cursor="Hand"
-                                FontFamily="Segoe UI Symbol"
-                                FontSize="18"
-                                ToolTip="Open Claude connection settings">
-                    <ToggleButton.Template>
-                      <ControlTemplate TargetType="ToggleButton">
-                        <ContentPresenter HorizontalAlignment="Center"
-                                          VerticalAlignment="Center" />
-                      </ControlTemplate>
-                    </ToggleButton.Template>
-                  </ToggleButton>
+                                ToolTip="Open Claude connection settings" />
+                  <ToggleButton x:Name="KiroChevronButton"
+                                Grid.Column="4"
+                                Style="{StaticResource ModernChevronToggleStyle}"
+                                Visibility="Collapsed"
+                                VerticalAlignment="Center"
+                                ToolTip="Choose the Kiro source" />
                 </Grid>
                 <ContentControl x:Name="ClaudeConnectionHost" Visibility="Collapsed" />
+                <Border x:Name="KiroSourcePanel"
+                        Margin="91,10,0,0"
+                        Padding="10"
+                        Background="#14000000"
+                        BorderBrush="#26FFFFFF"
+                        BorderThickness="1"
+                        CornerRadius="8"
+                        Visibility="Collapsed">
+                  <StackPanel>
+                    <TextBlock Text="USAGE SOURCE"
+                               FontFamily="{StaticResource AppFont}"
+                               FontSize="9"
+                               FontWeight="SemiBold"
+                               Foreground="{StaticResource MutedTextBrush}" />
+                    <ComboBox Margin="0,7,0,0"
+                              SelectedValue="{Binding SourcePreference, Mode=OneWay}"
+                              SelectedValuePath="Tag"
+                              Foreground="#1A1D26"
+                              AutomationProperties.Name="Kiro usage source"
+                              SelectionChanged="KiroSourceSelectionChanged">
+                      <ComboBoxItem Content="Automatic" Tag="automatic" />
+                      <ComboBoxItem Content="Kiro CLI" Tag="cli" />
+                      <ComboBoxItem Content="Kiro IDE" Tag="ide" />
+                    </ComboBox>
+                    <TextBlock Text="Automatic uses the first signed-in source that returns usable data."
+                               Margin="0,6,0,0"
+                               TextWrapping="Wrap"
+                               FontFamily="{StaticResource AppFont}"
+                               FontSize="9.5"
+                               Foreground="{StaticResource MutedTextBrush}" />
+                  </StackPanel>
+                </Border>
                 </StackPanel>
               </Border>
               <DataTemplate.Triggers>
@@ -959,14 +1132,20 @@
                           Property="Content"
                           Value="{StaticResource ClaudeConnectionPanel}" />
                 </DataTrigger>
+                <DataTrigger Binding="{Binding ProviderId}" Value="kiro">
+                  <Setter TargetName="KiroChevronButton" Property="Visibility" Value="Visible" />
+                </DataTrigger>
                 <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
                   <Setter TargetName="ProviderOptionBorder" Property="Background" Value="#227C5CFC" />
                   <Setter TargetName="ProviderOptionBorder" Property="BorderBrush" Value="#8A7C5CFC" />
                 </DataTrigger>
                 <Trigger SourceName="ClaudeChevronButton" Property="IsChecked" Value="True">
-                  <Setter TargetName="ClaudeChevronButton" Property="Content" Value="⌄" />
                   <Setter TargetName="ClaudeChevronButton" Property="ToolTip" Value="Close Claude connection settings" />
                   <Setter TargetName="ClaudeConnectionHost" Property="Visibility" Value="Visible" />
+                </Trigger>
+                <Trigger SourceName="KiroChevronButton" Property="IsChecked" Value="True">
+                  <Setter TargetName="KiroChevronButton" Property="ToolTip" Value="Close Kiro source settings" />
+                  <Setter TargetName="KiroSourcePanel" Property="Visibility" Value="Visible" />
                 </Trigger>
               </DataTemplate.Triggers>
             </DataTemplate>
@@ -983,16 +1162,14 @@
 
           <StackPanel>
             <CheckBox x:Name="StartWithWindowsCheckBox"
+                      Style="{StaticResource ModernCheckBoxStyle}"
                       Content="Start with Windows"
-                      Foreground="#E5E9F2"
-                      FontFamily="{StaticResource AppFont}"
-                      FontSize="11"
                       VerticalAlignment="Center"
                       AutomationProperties.Name="Start AI Usage Monitor with Windows"
                       Checked="StartWithWindowsCheckBox_Changed"
                       Unchecked="StartWithWindowsCheckBox_Changed" />
             <TextBlock Text="Open the gadget after you sign in. Keep its extracted folder in a permanent location."
-                       Margin="20,3,0,0"
+                       Margin="41,3,0,0"
                        TextWrapping="Wrap"
                        FontFamily="{StaticResource AppFont}"
                        FontSize="9.5"
@@ -1055,34 +1232,13 @@
           </ScrollViewer.Resources>
           <StackPanel>
             <StackPanel HorizontalAlignment="Center">
-              <Border Width="64" Height="64" CornerRadius="19" HorizontalAlignment="Center">
-                <Border.Background>
-                  <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                    <GradientStop Color="#7C5CFC" Offset="0" />
-                    <GradientStop Color="#28C7FA" Offset="1" />
-                  </LinearGradientBrush>
-                </Border.Background>
-                <Viewbox Width="38" Height="38">
-                  <Grid Width="24" Height="24">
-                    <Path Data="M4,17 A9,9 0 1 1 20,17"
-                          Stroke="White"
-                          StrokeThickness="2"
-                          StrokeStartLineCap="Round"
-                          StrokeEndLineCap="Round" />
-                    <Path Data="M12,14 L16.5,9.5"
-                          Stroke="White"
-                          StrokeThickness="2"
-                          StrokeStartLineCap="Round"
-                          StrokeEndLineCap="Round" />
-                    <Ellipse Width="3.5"
-                             Height="3.5"
-                             Fill="White"
-                             HorizontalAlignment="Center"
-                             VerticalAlignment="Top"
-                             Margin="0,12.25,0,0" />
-                  </Grid>
-                </Viewbox>
-              </Border>
+              <Image Width="64"
+                     Height="64"
+                     HorizontalAlignment="Center"
+                     Source="Assets/AIUsageMonitor.png"
+                     Stretch="Uniform"
+                     RenderOptions.BitmapScalingMode="HighQuality"
+                     AutomationProperties.Name="AI Usage Monitor logo" />
               <TextBlock Text="AI Usage Monitor"
                          Margin="0,11,0,0"
                          HorizontalAlignment="Center"
@@ -1143,6 +1299,13 @@
                           Style="{StaticResource LinkButtonStyle}"
                           AutomationProperties.Name="Check GitHub Releases for updates"
                           Click="CheckForUpdatesButton_Click" />
+                  <Button x:Name="DownloadUpdateButton"
+                          Content="Download update"
+                          Margin="8,0,0,0"
+                          Style="{StaticResource LinkButtonStyle}"
+                          AutomationProperties.Name="Choose where to save the AI Usage Monitor update"
+                          Visibility="Collapsed"
+                          Click="DownloadUpdateButton_Click" />
                   <Button x:Name="ViewReleaseButton"
                           Content="View release"
                           Margin="8,0,0,0"

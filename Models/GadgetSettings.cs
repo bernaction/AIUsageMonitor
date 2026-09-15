@@ -14,4 +14,6 @@ public sealed class ProviderPreference
     public string ProviderId { get; init; } = string.Empty;
 
     public bool IsVisible { get; init; } = true;
+
+    public string? Source { get; init; }
 }

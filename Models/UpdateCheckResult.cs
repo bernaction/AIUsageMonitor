@@ -7,8 +7,20 @@ public sealed record UpdateCheckResult(
     Uri? ReleaseUrl,
     string? ErrorMessage)
 {
-    public static UpdateCheckResult Available(string latestTag, Uri releaseUrl) =>
-        new(true, true, latestTag, releaseUrl, null);
+    public Uri? DownloadUrl { get; init; }
+
+    public string? AssetName { get; init; }
+
+    public static UpdateCheckResult Available(
+        string latestTag,
+        Uri releaseUrl,
+        Uri? downloadUrl,
+        string? assetName) =>
+        new(true, true, latestTag, releaseUrl, null)
+        {
+            DownloadUrl = downloadUrl,
+            AssetName = assetName
+        };
 
     public static UpdateCheckResult Current(string latestTag, Uri releaseUrl) =>
         new(true, false, latestTag, releaseUrl, null);
